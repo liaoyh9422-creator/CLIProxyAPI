@@ -3143,14 +3143,18 @@ public class MainActivity extends Activity {
                                 if (s != -1) {
                                     int e = raw.indexOf(".trycloudflare.com", s);
                                     if (e != -1) {
-                                        String domain = raw.substring(s, e + 18);
+                                        String domain = raw.substring(s, e + 17).trim();
                                         currentTunnelDomain = domain;
-                                        tunnelStatusText.setText("已就绪");
+                                        tunnelStatusText.setText("穿透成功 (已连通)");
                                         tunnelStatusText.setTextColor(Color.parseColor(UiTheme.C_GREEN));
                                         refreshTunnelEndpoints();
                                         refreshAddressSection();
                                     }
                                 }
+                            }
+                            if (raw.contains("穿透失败") || raw.contains("deadline exceeded")) {
+                                tunnelStatusText.setText("穿透失败 (连接超时)");
+                                tunnelStatusText.setTextColor(Color.parseColor(UiTheme.C_RED));
                             }
                         });
                     } else {

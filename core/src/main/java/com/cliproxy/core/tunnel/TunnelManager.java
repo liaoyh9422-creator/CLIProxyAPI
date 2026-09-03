@@ -6,10 +6,13 @@ import com.cliproxy.core.proot.ProotManager;
 import com.cliproxy.core.util.AssetExtractor;
 import com.cliproxy.core.util.ProcessUtil;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -110,14 +113,40 @@ public class TunnelManager {
             writeTunnelLog("进程已启动 (pid=" + (pid > 0 ? pid : "auto") + ")\n\n");
             if (listener != null) listener.onStatus("隧道运行中");
 
-            // 异步捕获隧道日志
+            // 异步捕获隧道日志并智能分析成败
+            final boolean[] tunnelReady = new boolean[]{false};
             new Thread(() -> {
-                try (FileOutputStream logOs = new FileOutputStream(tunnelLogFile, true)) {
-                    InputStream is = tunnelProcess.getInputStream();
-                    byte[] buffer = new byte[4096];
-                    int read;
-                    while ((read = is.read(buffer)) != -1) {
-                        logOs.write(buffer, 0, read);
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(tunnelProcess.getInputStream(), StandardCharsets.UTF_8));
+                     FileOutputStream logOs = new FileOutputStream(tunnelLogFile, true)) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        String out = line + "\n";
+                        logOs.write(out.getBytes(StandardCharsets.UTF_8));
+
+                        if (line.contains(".trycloudflare.com")) {
+                            int s = line.indexOf("https://");
+                            if (s != -1) {
+                                int e = line.indexOf(".trycloudflare.com", s);
+                                if (e != -1) {
+                                    String domain = line.substring(s, e + 17).trim();
+                                    tunnelReady[0] = true;
+                                    String successBanner = "\n========================================\n"
+                                            + "✅ 穿透成功！公网地址: " + domain + "\n"
+                                            + "========================================\n\n";
+                                    logOs.write(successBanner.getBytes(StandardCharsets.UTF_8));
+                                    if (listener != null) listener.onStatus("穿透成功 (" + domain + ")");
+                                }
+                            }
+                        }
+
+                        if (line.contains("context deadline exceeded") || line.contains("failed to request quick Tunnel")) {
+                            String failBanner = "\n========================================\n"
+                                    + "❌ 穿透失败：连接超时，请开启【出站代理】后重试\n"
+                                    + "========================================\n\n";
+                            logOs.write(failBanner.getBytes(StandardCharsets.UTF_8));
+                            if (listener != null) listener.onStatus("穿透失败: 连接超时");
+                        }
+
                         logOs.flush();
                     }
                 } catch (IOException e) {
@@ -127,7 +156,10 @@ public class TunnelManager {
 
             int exitCode = tunnelProcess.waitFor();
             writeTunnelLog("\n进程退出 (code=" + exitCode + ")\n");
-            if (listener != null) listener.onStatus("隧道已停止 (exit " + exitCode + ")");
+            if (exitCode != 0 && !tunnelReady[0]) {
+                writeTunnelLog("❌ 穿透失败：进程异常退出 (code=" + exitCode + ")，建议检查出站代理设置\n");
+            }
+            if (listener != null) listener.onStatus(exitCode == 0 ? "隧道已停止" : ("隧道异常退出 (exit " + exitCode + ")"));
         } catch (Exception e) {
             Log.e(TAG, "Tunnel start failed", e);
             String msg = e.getMessage();
