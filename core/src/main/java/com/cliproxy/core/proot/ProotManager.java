@@ -108,17 +108,10 @@ public class ProotManager {
             Log.w(TAG, "Cannot get versionCode: " + e.getMessage());
         }
 
-        File marker = new File(glibcDir, ".done");
-        if (marker.exists() && new File(libPath, "libc.so.6").exists()) {
-            try {
-                String markerContent = new String(java.nio.file.Files.readAllBytes(marker.toPath())).trim();
-                int markerVersionCode = 0;
-                try { markerVersionCode = Integer.parseInt(markerContent); } catch (Exception ignored) {}
-                if (markerVersionCode == currentVersionCode && currentVersionCode > 0) {
-                    return true;
-                }
-            } catch (Exception ignored) {}
-            ProcessUtil.deleteRecursive(glibcDir);
+        File libc = new File(libPath, "libc.so.6");
+        File linker = new File(glibcDir, "lib/ld-linux-aarch64.so.1");
+        if (libc.exists() && linker.exists()) {
+            return true;
         }
 
         glibcDir.mkdirs();
@@ -130,8 +123,8 @@ public class ProotManager {
         } catch (Exception ignored) {}
 
         if (!hasAsset) {
-            // Lite 模式：如果未下载则返回 false
-            return false;
+            // Lite 模式：外部已下载直接返回，未下载返回 false
+            return libc.exists() && linker.exists();
         }
 
         try {
@@ -176,6 +169,7 @@ public class ProotManager {
 
             boolean ok = new File(libPath, "libc.so.6").exists();
             if (ok) {
+                File marker = new File(glibcDir, ".done");
                 try (FileWriter fw = new FileWriter(marker)) {
                     fw.write(String.valueOf(currentVersionCode));
                 }

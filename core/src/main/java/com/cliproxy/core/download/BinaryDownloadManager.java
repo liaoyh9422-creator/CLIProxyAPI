@@ -63,9 +63,9 @@ public class BinaryDownloadManager {
     /** 检测 Glibc 基础运行库是否就绪（内置 assets 或已解压在 filesDir/glibc） */
     public static boolean isGlibcReady(Context context) {
         File glibcDir = new File(context.getFilesDir(), "glibc");
-        File marker = new File(glibcDir, ".done");
-        File libc = new File(glibcDir, "usr/lib/aarch64-linux-gnu/libc.so.6");
-        if (marker.exists() && libc.exists()) return true;
+        File libc = new File(glibcDir, "usr/lib64/libc.so.6");
+        File linker = new File(glibcDir, "lib/ld-linux-aarch64.so.1");
+        if (libc.exists() && linker.exists()) return true;
 
         try (InputStream is = context.getAssets().open("glibc-libs-arm64.tar.bin")) {
             return is != null;
@@ -232,11 +232,21 @@ public class BinaryDownloadManager {
                     unpackTarGz(mergedArchive, glibcDir);
                     mergedArchive.delete();
 
-                    File libDir = new File(glibcDir, "usr/lib/aarch64-linux-gnu");
+                    File libDir = new File(glibcDir, "usr/lib64");
                     if (libDir.exists()) {
                         File[] libs = libDir.listFiles();
                         if (libs != null) {
                             for (File lib : libs) lib.setReadable(true, false);
+                        }
+                    }
+                    File ldDir = new File(glibcDir, "lib");
+                    if (ldDir.exists()) {
+                        File[] lds = ldDir.listFiles();
+                        if (lds != null) {
+                            for (File ld : lds) {
+                                ld.setExecutable(true, false);
+                                ld.setReadable(true, false);
+                            }
                         }
                     }
                     File binDir = new File(glibcDir, "usr/bin");
