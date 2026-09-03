@@ -28,18 +28,33 @@ public class LogHelper {
         return res;
     }
 
-    public static int getLogColor(String line, int index) {
+    public enum LogType {
+        ERROR, WARN, SUCCESS, INFO
+    }
+
+    public static LogType getLogType(String line) {
+        if (line == null) return LogType.INFO;
         String lower = line.toLowerCase(Locale.ROOT);
         if (lower.contains("error") || lower.contains("fail") || lower.contains("exception") || line.contains("❌") || line.contains("!!!")) {
-            return Color.parseColor("#FF7B72");
+            return LogType.ERROR;
         }
         if (lower.contains("warn") || line.contains("⚠")) {
-            return Color.parseColor("#FFA657");
+            return LogType.WARN;
         }
         if (lower.contains("started") || lower.contains("listening") || lower.contains("success") || line.contains("✅") || line.contains("===") || line.contains("⚡")) {
-            return Color.parseColor("#7EE787");
+            return LogType.SUCCESS;
         }
-        return (index % 2 == 0) ? Color.parseColor("#79C0FF") : Color.parseColor("#E6EDF3");
+        return LogType.INFO;
+    }
+
+    public static int getLogColor(String line, int index) {
+        LogType type = getLogType(line);
+        switch (type) {
+            case ERROR: return Color.parseColor("#FF7B72");
+            case WARN: return Color.parseColor("#FFA657");
+            case SUCCESS: return Color.parseColor("#7EE787");
+            default: return (index % 2 == 0) ? Color.parseColor("#79C0FF") : Color.parseColor("#E6EDF3");
+        }
     }
 
     public static void appendStyledLog(Context context, LinearLayout container, StringBuilder fullLog, ScrollView sv, String rawLine, int index) {
