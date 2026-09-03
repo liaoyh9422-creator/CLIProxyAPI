@@ -16,8 +16,6 @@ import android.widget.Toast;
 
 import com.cliproxy.app.MainActivity;
 import com.cliproxy.app.ui.UiTheme;
-import com.cliproxy.core.cache.ResponseCacheDb;
-import com.cliproxy.core.cache.SmartCacheProxy;
 import com.cliproxy.core.metrics.MetricsTracker;
 
 import java.util.ArrayList;
@@ -26,7 +24,7 @@ import java.util.Locale;
 
 /**
  * MetricsTab: Tab 3 流量与运维统计仪表控制台
- * 包含核心六宫格指标、智能响应缓存（5ms秒回）管控与最近访问审计异常排查
+ * 包含核心六宫格指标、实时多模型Token消耗统计与最近访问审计异常排查
  */
 public class MetricsTab {
 
@@ -37,12 +35,9 @@ public class MetricsTab {
     private TextView metricFailedRequests;
     private TextView metricAvgLatency;
     private TextView metricTotalTokens;
-    private TextView metricSavedTokens;
     private TextView metricUptime;
-    private TextView metricCacheHits;
-    private TextView metricCachedCount;
     private LinearLayout metricsLogList;
-    private int auditFilterMode = 0; // 0: 全部, 1: 仅失败, 2: 仅秒回
+    private int auditFilterMode = 0; // 0: 全部, 1: 仅失败, 2: 仅成功
     private final TextView[] auditFilterPills = new TextView[3];
 
     public MetricsTab(MainActivity activity) {
@@ -55,9 +50,8 @@ public class MetricsTab {
         layout.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         layout.setPadding(UiTheme.dp(activity, 12), UiTheme.dp(activity, 8), UiTheme.dp(activity, 12), UiTheme.dp(activity, 4));
 
-        layout.addView(UiTheme.buildSectionHeader(activity, "流量与运维监控", "核心调用吞吐指标、智能响应缓存与访问异常排查"));
+        layout.addView(UiTheme.buildSectionHeader(activity, "流量与运维监控", "核心调用吞吐指标、多模型实时Token统计与访问异常排查"));
         layout.addView(buildKpiGridSection());
-        layout.addView(buildSmartCacheSection());
 
         View auditCard = buildAuditSection();
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -113,8 +107,7 @@ public class MetricsTab {
         metricTotalTokens = kpi4.findViewById(android.R.id.text1);
         row2.addView(kpi4, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        View kpi5 = createKpiItem("节省 Token", "~0", UiTheme.C_GREEN);
-        metricSavedTokens = kpi5.findViewById(android.R.id.text1);
+        View kpi5 = createKpiItem("网关端口", ":8317", UiTheme.C_CYAN);
         row2.addView(kpi5, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         View kpi6 = createKpiItem("已运行时长", "未运行", UiTheme.C_PURPLE);
@@ -122,84 +115,6 @@ public class MetricsTab {
         row2.addView(kpi6, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         card.addView(row2);
 
-        return card;
-    }
-
-    /** 本地智能响应缓存卡片 */
-    private View buildSmartCacheSection() {
-        LinearLayout card = new LinearLayout(activity);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(UiTheme.roundRect(activity, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 6));
-        card.setPadding(UiTheme.dp(activity, 10), UiTheme.dp(activity, 6), UiTheme.dp(activity, 10), UiTheme.dp(activity, 6));
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        clp.topMargin = UiTheme.dp(activity, 6);
-        card.setLayoutParams(clp);
-
-        LinearLayout top = new LinearLayout(activity);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        top.setPadding(0, 0, 0, UiTheme.dp(activity, 4));
-
-        TextView title = new TextView(activity);
-        title.setText("⚡ 智能响应缓存 (5ms 秒回)");
-        title.setTextSize(11f);
-        title.setTextColor(Color.parseColor(UiTheme.C_TEXT));
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        boolean isCacheOn = activity.getPrefs().getBoolean("cache_enabled", false);
-        SmartCacheProxy.setGlobalCacheEnabled(isCacheOn);
-
-        TextView btnCacheToggle = UiTheme.createButton(activity, isCacheOn ? "已开启" : "已关闭",
-                isCacheOn ? UiTheme.C_GREEN : UiTheme.C_DIM,
-                isCacheOn ? "#0D2818" : UiTheme.C_SURFACE_ALT,
-                isCacheOn ? UiTheme.C_GREEN : UiTheme.C_BORDER, 3);
-        btnCacheToggle.setOnClickListener(v -> {
-            boolean nextState = !activity.getPrefs().getBoolean("cache_enabled", false);
-            activity.getPrefs().edit().putBoolean("cache_enabled", nextState).apply();
-            SmartCacheProxy.setGlobalCacheEnabled(nextState);
-
-            btnCacheToggle.setText(nextState ? "已开启" : "已关闭");
-            btnCacheToggle.setTextColor(Color.parseColor(nextState ? UiTheme.C_GREEN : UiTheme.C_DIM));
-            btnCacheToggle.setBackground(UiTheme.roundRect(activity,
-                    nextState ? "#0D2818" : UiTheme.C_SURFACE_ALT,
-                    nextState ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
-
-            Toast.makeText(activity, nextState ? "智能缓存已开启 (5ms 极速秒回)" : "智能缓存已关闭 (全量直通模型)", Toast.LENGTH_SHORT).show();
-        });
-        top.addView(btnCacheToggle);
-
-        TextView btnViewCache = UiTheme.createButton(activity, "查看", UiTheme.C_CYAN, "#0A2328", UiTheme.C_CYAN, 3);
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        vlp.leftMargin = UiTheme.dp(activity, 5);
-        btnViewCache.setLayoutParams(vlp);
-        btnViewCache.setOnClickListener(v -> showCacheViewerDialog());
-        top.addView(btnViewCache);
-
-        TextView clearCacheBtn = UiTheme.createButton(activity, "清空", UiTheme.C_DIM, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
-        LinearLayout.LayoutParams clpBtn = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        clpBtn.leftMargin = UiTheme.dp(activity, 5);
-        clearCacheBtn.setLayoutParams(clpBtn);
-        clearCacheBtn.setOnClickListener(v -> {
-            ResponseCacheDb.getInstance(activity).clear();
-            refreshMetricsView();
-            Toast.makeText(activity, "本地响应缓存已清空", Toast.LENGTH_SHORT).show();
-        });
-        top.addView(clearCacheBtn);
-        card.addView(top);
-
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-
-        View item1 = createKpiItem("缓存命中", "0 次", UiTheme.C_CYAN);
-        metricCacheHits = item1.findViewById(android.R.id.text1);
-        row.addView(item1, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        View item2 = createKpiItem("已缓存词条", "0 条", UiTheme.C_PURPLE);
-        metricCachedCount = item2.findViewById(android.R.id.text1);
-        row.addView(item2, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        card.addView(row);
         return card;
     }
 
@@ -245,8 +160,8 @@ public class MetricsTab {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // 筛选胶囊：全部 / 仅看失败 / 仅看秒回
-        String[] filterTitles = {"全部", "🔴 仅失败", "⚡ 仅秒回"};
+        // 筛选胶囊：全部 / 仅看失败 / 仅看成功
+        String[] filterTitles = {"全部", "🔴 仅失败", "🟢 仅成功"};
         for (int i = 0; i < 3; i++) {
             final int fIdx = i;
             boolean active = (auditFilterMode == i);
@@ -335,20 +250,8 @@ public class MetricsTab {
         if (metricTotalTokens != null) {
             metricTotalTokens.setText(mt.getFormattedTotalTokens());
         }
-        if (metricSavedTokens != null) {
-            ResponseCacheDb cacheDb = ResponseCacheDb.getInstance(activity);
-            metricSavedTokens.setText("~" + cacheDb.getTotalSavedTokens());
-        }
         if (metricUptime != null) {
             metricUptime.setText(mt.getFormattedUptime());
-        }
-
-        ResponseCacheDb cacheDb = ResponseCacheDb.getInstance(activity);
-        if (metricCacheHits != null) {
-            metricCacheHits.setText(cacheDb.getTotalHits() + " 次");
-        }
-        if (metricCachedCount != null) {
-            metricCachedCount.setText(cacheDb.getCachedEntriesCount() + " 条");
         }
 
         if (metricsLogList != null) {
@@ -357,14 +260,14 @@ public class MetricsTab {
             List<MetricsTracker.RequestRecord> list = new ArrayList<>();
             for (MetricsTracker.RequestRecord r : rawList) {
                 if (auditFilterMode == 1 && r.isSuccess()) continue; // 仅看失败
-                if (auditFilterMode == 2 && !r.isCacheHit) continue; // 仅看秒回
+                if (auditFilterMode == 2 && !r.isSuccess()) continue; // 仅看成功
                 list.add(r);
             }
 
             if (list.isEmpty()) {
                 TextView empty = new TextView(activity);
                 empty.setText(auditFilterMode == 1 ? "暂无失败记录 (大模型请求全部正常)" :
-                             (auditFilterMode == 2 ? "暂无缓存秒回记录 (开启智能缓存后重复请求可命中)" :
+                             (auditFilterMode == 2 ? "暂无成功请求记录" :
                              "暂无调用记录（启动服务后通过客户端发起请求即可记录）"));
                 empty.setTextSize(10.5f);
                 empty.setTextColor(Color.parseColor(UiTheme.C_DIM));
@@ -532,101 +435,5 @@ public class MetricsTab {
         row.addView(tvV);
 
         return row;
-    }
-
-    /** 打开本地已缓存条目明细浏览器 */
-    private void showCacheViewerDialog() {
-        Dialog dialog = new Dialog(activity);
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackground(UiTheme.roundRect(activity, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 8));
-        root.setPadding(UiTheme.dp(activity, 14), UiTheme.dp(activity, 12), UiTheme.dp(activity, 14), UiTheme.dp(activity, 12));
-
-        TextView title = new TextView(activity);
-        title.setText("📦 本地已缓存响应条目");
-        title.setTextSize(13);
-        title.setTextColor(Color.parseColor(UiTheme.C_TEXT));
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
-
-        ResponseCacheDb db = ResponseCacheDb.getInstance(activity);
-        List<ResponseCacheDb.CacheEntry> entries = db.getAllEntries(100);
-
-        ScrollView scroll = new ScrollView(activity);
-        scroll.setBackgroundColor(Color.parseColor("#080B0F"));
-        scroll.setFillViewport(true);
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(activity, 280));
-        slp.topMargin = UiTheme.dp(activity, 8);
-        scroll.setLayoutParams(slp);
-
-        LinearLayout list = new LinearLayout(activity);
-        list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(UiTheme.dp(activity, 6), UiTheme.dp(activity, 4), UiTheme.dp(activity, 6), UiTheme.dp(activity, 4));
-
-        if (entries.isEmpty()) {
-            TextView empty = new TextView(activity);
-            empty.setText("暂无缓存数据。在客户端多次发送完全相同的 Prompt 即可触发 5ms 秒回。");
-            empty.setTextSize(11);
-            empty.setTextColor(Color.parseColor(UiTheme.C_DIM));
-            empty.setPadding(UiTheme.dp(activity, 4), UiTheme.dp(activity, 8), UiTheme.dp(activity, 4), UiTheme.dp(activity, 8));
-            list.addView(empty);
-        } else {
-            for (ResponseCacheDb.CacheEntry e : entries) {
-                LinearLayout item = new LinearLayout(activity);
-                item.setOrientation(LinearLayout.VERTICAL);
-                item.setPadding(0, UiTheme.dp(activity, 4), 0, UiTheme.dp(activity, 4));
-
-                LinearLayout hRow = new LinearLayout(activity);
-                hRow.setOrientation(LinearLayout.HORIZONTAL);
-                hRow.setGravity(Gravity.CENTER_VERTICAL);
-
-                TextView tvModel = new TextView(activity);
-                tvModel.setText(e.model);
-                tvModel.setTextSize(10.5f);
-                tvModel.setTextColor(Color.parseColor(UiTheme.C_CYAN));
-                tvModel.setTypeface(Typeface.DEFAULT_BOLD);
-                hRow.addView(tvModel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-                TextView tvHits = new TextView(activity);
-                tvHits.setText("命中: " + e.hitCount + " 次 · 节省 ~" + (e.hitCount * e.tokenCount) + " Tokens");
-                tvHits.setTextSize(9.5f);
-                tvHits.setTextColor(Color.parseColor(UiTheme.C_GREEN));
-                hRow.addView(tvHits);
-                item.addView(hRow);
-
-                TextView tvPrompt = new TextView(activity);
-                tvPrompt.setText("Prompt: " + e.promptSummary);
-                tvPrompt.setTextSize(10f);
-                tvPrompt.setTextColor(Color.parseColor(UiTheme.C_TEXT));
-                tvPrompt.setSingleLine(true);
-                tvPrompt.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                item.addView(tvPrompt);
-
-                list.addView(item);
-
-                View div = new View(activity);
-                div.setBackgroundColor(Color.parseColor("#1C232E"));
-                list.addView(div, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(activity, 1)));
-            }
-        }
-        scroll.addView(list);
-        root.addView(scroll);
-
-        TextView closeBtn = UiTheme.createButton(activity, "关闭", UiTheme.C_DIM, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        clp.topMargin = UiTheme.dp(activity, 8);
-        closeBtn.setLayoutParams(clp);
-        closeBtn.setOnClickListener(v -> dialog.dismiss());
-        root.addView(closeBtn);
-
-        dialog.setContentView(root);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout((int) (activity.getResources().getDisplayMetrics().widthPixels * 0.92), ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
-        dialog.show();
     }
 }

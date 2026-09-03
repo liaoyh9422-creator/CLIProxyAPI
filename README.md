@@ -33,9 +33,9 @@
 * **Lite 极速轻量版 (仅 1.2 MB)**：安装包精简至极限，仅保留纯 Native 壳工程，底层核心二进制（glibc 运行时、CLIProxy 内核、Cloudflare、Tailscale）在初次启动时按需从国内镜像极速下载与自动化部署。
 * **Full 离线完整版 (50 MB)**：内置全部运行时库与静态二进制文件，完全离线运行，开箱即用。
 
-### 2. 🧠 本地智能响应缓存 (Smart Semantic Cache)
-* 内置轻量级 SQLite 高性能响应缓存引擎，支持精确哈希匹配与语义特征识别。
-* 针对历史相同/高频 Prompt 实现 **5ms 毫秒级极速秒回**，消耗 **0 Token**，极大节省 API 费用并提升使用体验。
+### 2. ⚡️ 极速零拷贝直通与多厂商 Token 实时嗅探
+* **纯原生 TCP 零拷贝直通**：内存开销极低，流式打字机打字效果 100% 丝滑无延迟。
+* **Keep-Alive 长连接全链路追踪**：完美兼容多轮对话连接复用，实时精准捕获 OpenAI、Claude、Gemini、DeepSeek 等大模型官方 Usage 与 Token 统计。
 
 ### 3. 🛡️ 外网共享多 Key 管理与双轨配额控制 (Multi-Key Policy)
 * **多租户 Guest 密钥分发**：支持为主机创建专属的外网共享 Key（如 `sk-guest-xxxx`），支持一键脱敏、重置与快速复制。
@@ -74,14 +74,14 @@ flowchart TD
 
     subgraph AndroidHost ["CLIProxyAPI Android 宿主 (Java / Kotlin)"]
         UI["4-Tab 极客终端面板<br/>(状态监控 / 外网分享 / 仪表盘 / 局域网)"]
-        SC["SmartCacheProxy 智能缓存拦截器<br/>(5ms 响应 · Token/计次双轨扣费 · RPM 限频)"]
+        SC["SmartCacheProxy 网关安全代理<br/>(零延迟直通 · 实时Token统计 · 双轨配额扣费 · RPM 限频)"]
         mDNS["mDNS 局域网发现广播器"]
         Downloader["BinaryDownloadManager<br/>(Lite 分卷拉取 · SHA-256 校验 · 自动挂载)"]
     end
 
     subgraph ProotCore ["PRoot 用户态 Linux 虚拟环境 (免 Root)"]
         Linker["ld-linux-aarch64.so.1 + Glibc Libs"]
-        ProxyBin["cli-proxy-api 原生静态服务 (端口 :8317)"]
+        ProxyBin["cli-proxy-api 原生静态服务 (端口 :8318)"]
         WebAdmin["/management.html 管理后台"]
     end
 
@@ -96,8 +96,7 @@ flowchart TD
     end
 
     Client -->|HTTP / HTTPS| SC
-    SC -->|命中缓存 (5ms 秒回)| Client
-    SC -->|未命中 / 扣减额度通过| ProxyBin
+    SC -->|鉴权通过 / 扣减额度通过 / 实时计费| ProxyBin
     ProxyBin --> Upstream
 
     ProxyBin <--> CF

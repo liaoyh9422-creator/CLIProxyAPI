@@ -344,15 +344,12 @@ public class ProxyService extends Service {
             int pid = ProcessUtil.getPid(proxyProcess);
             writeLog("核心进程已启动 (pid=" + (pid > 0 ? pid : "auto") + ")\n");
 
-            // 启动智能响应缓存代理（监听 publicPort 8317，转发至 backendPort 8318）
+            // 启动网关安全反向代理（监听 publicPort 8317，提供客用 Key 防刷鉴权并转发至 backendPort 8318）
             SharedPreferences prefs = getSharedPreferences("cliproxy_prefs", MODE_PRIVATE);
-            boolean cacheOn = prefs.getBoolean("cache_enabled", false);
-            SmartCacheProxy.setGlobalCacheEnabled(cacheOn);
-
             if (smartCacheProxy != null) smartCacheProxy.stop();
             smartCacheProxy = new SmartCacheProxy(this, publicPort, backendPort);
             smartCacheProxy.start();
-            writeLog("⚡ 本地反向代理就绪 (服务端口 " + publicPort + " -> 后端 " + backendPort + ")" + (cacheOn ? " [缓存开启]\n" : " [缓存关闭]\n"));
+            writeLog("⚡ 网关反向代理就绪 (服务端口 " + publicPort + " -> 后端 " + backendPort + ")\n");
 
             // 启动 mDNS 局域网服务广播（默认不开启）
             if (prefs.getBoolean("mdns_enabled", false)) {
@@ -520,9 +517,6 @@ public class ProxyService extends Service {
         StringBuilder bigContent = new StringBuilder();
         if (isServerRunning) {
             bigContent.append("● 本地端口: http://127.0.0.1:").append(serverPort);
-            if (smartCacheProxy != null) {
-                bigContent.append(" (⚡5ms秒回)");
-            }
         } else {
             bigContent.append("● 核心状态: ").append(currentCoreStatus);
         }

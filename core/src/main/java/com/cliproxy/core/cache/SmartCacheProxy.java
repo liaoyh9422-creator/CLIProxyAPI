@@ -4,8 +4,6 @@ import android.content.Context;
 import android.util.Log;
 import com.cliproxy.core.metrics.MetricsTracker;
 import com.cliproxy.core.metrics.TokenEstimator;
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -13,7 +11,6 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -26,9 +23,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 智能响应缓存反向代理：
- * 监听公开端口（默认 8317），拦截 /v1/chat/completions 智能命中与回放缓存。
- * 支持热插拔一键开关，未命中或关闭时 100% 原生 TCP 双向透明管道转发，绝不降级！
+ * 网关安全反向代理：
+ * 监听公开端口（默认 8317），提供毫秒级多客用 Key 限流防刷拦截与配额控制，
+ * 并以 100% 极速原生 TCP 零拷贝直通转发，多轮对话毫秒级实时嗅探 Token 消耗。
  */
 public class SmartCacheProxy {
     private static final String TAG = "SmartCacheProxy";
@@ -275,100 +272,7 @@ public class SmartCacheProxy {
                      requestLine.contains("/v1/messages") ||
                      requestLine.contains("generateContent")));
 
-            // 开关处于启用状态 且 请求为聊天生成接口
-            if (globalCacheEnabled && isChatCompletion && contentLength > 0 && contentLength < 1048576) {
-                byte[] rawHeaderBytes = headerBuffer.toByteArray();
-                int headerEndIdx = findHeaderEnd(rawHeaderBytes);
-                int bodyAlreadyRead = rawHeaderBytes.length - headerEndIdx;
-
-                ByteArrayOutputStream bodyBuffer = new ByteArrayOutputStream();
-                if (bodyAlreadyRead > 0) {
-                    bodyBuffer.write(rawHeaderBytes, headerEndIdx, bodyAlreadyRead);
-                }
-
-                while (bodyBuffer.size() < contentLength) {
-                    int toRead = Math.min(buf.length, contentLength - bodyBuffer.size());
-                    int n = inFromClient.read(buf, 0, toRead);
-                    if (n == -1) break;
-                    bodyBuffer.write(buf, 0, n);
-                }
-
-                byte[] bodyBytes = bodyBuffer.toByteArray();
-                String bodyJsonStr = new String(bodyBytes, StandardCharsets.UTF_8);
-
-                try {
-                    JSONObject reqJson = new JSONObject(bodyJsonStr);
-                    String model = reqJson.optString("model", "default");
-                    boolean isStream = reqJson.optBoolean("stream", false);
-                    JSONArray messages = reqJson.optJSONArray("messages");
-
-                    // 检测是否包含工具调用（tools / functions / tool_choice / role=tool）
-                    boolean hasTools = reqJson.has("tools") || reqJson.has("functions") || reqJson.has("tool_choice");
-                    if (!hasTools && messages != null) {
-                        for (int mi = 0; mi < messages.length(); mi++) {
-                            JSONObject mObj = messages.optJSONObject(mi);
-                            if (mObj != null) {
-                                String role = mObj.optString("role");
-                                if ("tool".equals(role) || "function".equals(role) || mObj.has("tool_calls")) {
-                                    hasTools = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (hasTools) {
-                        // 带有工具调用的动态交互，智能绕过静态缓存，走极速原生双向直通管道，绝不阻塞卡死！
-                        backendSocket = new Socket("127.0.0.1", backendPort);
-                        backendSocket.setTcpNoDelay(true);
-                        backendSocket.getOutputStream().write(rawHeaderBytes, 0, headerEndIdx);
-                        backendSocket.getOutputStream().write(bodyBytes);
-                        backendSocket.getOutputStream().flush();
-                        pipeSockets(clientSocket, backendSocket, activePolicy, true);
-                        return;
-                    }
-
-                    if (messages != null && messages.length() > 0) {
-                        String cacheKey = computeCacheKey(model, messages);
-                        ResponseCacheDb db = ResponseCacheDb.getInstance(context);
-                        ResponseCacheDb.CacheEntry cached = db.get(cacheKey);
-
-                        if (cached != null) {
-                            // 缓存命中：5ms 秒回
-                            replayCachedResponse(outToClient, cached, isStream);
-                            MetricsTracker.getInstance().parseLogLine("200 | 5ms | 127.0.0.1 | POST \"/v1/chat/completions\" [⚡缓存秒回]");
-                            clientSocket.close();
-                            return;
-                        }
-
-                        // 缓存未命中：中继后端并捕获内容存库
-                        backendSocket = new Socket("127.0.0.1", backendPort);
-                        backendSocket.setTcpNoDelay(true);
-
-                        OutputStream outToBackend = backendSocket.getOutputStream();
-                        InputStream inFromBackend = backendSocket.getInputStream();
-
-                        outToBackend.write(rawHeaderBytes, 0, headerEndIdx);
-                        outToBackend.write(bodyBytes);
-                        outToBackend.flush();
-
-                        relayAndCaptureResponse(inFromBackend, outToClient, cacheKey, model, messages, isStream, activePolicy);
-                        return;
-                    }
-                } catch (Exception parseErr) {
-                    Log.w(TAG, "Cache parsing fallback: " + parseErr.getMessage());
-                }
-
-                // 解析异常，平滑降级
-                backendSocket = new Socket("127.0.0.1", backendPort);
-                backendSocket.getOutputStream().write(rawHeaderBytes, 0, headerEndIdx);
-                backendSocket.getOutputStream().write(bodyBytes);
-                backendSocket.getOutputStream().flush();
-                pipeSockets(clientSocket, backendSocket, activePolicy, isChatCompletion);
-                return;
-            }
-
-            // 缓存关闭 或 非聊天接口：原生 TCP 双向零拷贝直通
+            // 极速原生 TCP 双向零拷贝直通转发
             backendSocket = new Socket("127.0.0.1", backendPort);
             backendSocket.setTcpNoDelay(true);
 
@@ -384,197 +288,6 @@ public class SmartCacheProxy {
         } finally {
             closeQuietly(clientSocket);
             closeQuietly(backendSocket);
-        }
-    }
-
-    private void replayCachedResponse(OutputStream out, ResponseCacheDb.CacheEntry cached, boolean isStream) throws Exception {
-        String content = cached.responseContent;
-        if (isStream) {
-            StringBuilder sse = new StringBuilder();
-            sse.append("HTTP/1.1 200 OK\r\n");
-            sse.append("Content-Type: text/event-stream; charset=utf-8\r\n");
-            sse.append("Cache-Control: no-cache\r\n");
-            sse.append("Connection: close\r\n");
-            sse.append("Access-Control-Allow-Origin: *\r\n");
-            sse.append("X-Cache: HIT-LOCAL-5MS\r\n\r\n");
-            out.write(sse.toString().getBytes(StandardCharsets.UTF_8));
-            out.flush();
-
-            int chunkSize = Math.max(1, content.length() / 8);
-            for (int i = 0; i < content.length(); i += chunkSize) {
-                int end = Math.min(content.length(), i + chunkSize);
-                String sub = content.substring(i, end);
-
-                JSONObject delta = new JSONObject();
-                delta.put("content", sub);
-
-                JSONObject choice = new JSONObject();
-                choice.put("index", 0);
-                choice.put("delta", delta);
-
-                JSONArray choices = new JSONArray();
-                choices.put(choice);
-
-                JSONObject chunkObj = new JSONObject();
-                chunkObj.put("id", "chatcmpl-cache");
-                chunkObj.put("object", "chat.completion.chunk");
-                chunkObj.put("created", System.currentTimeMillis() / 1000);
-                chunkObj.put("model", cached.model);
-                chunkObj.put("choices", choices);
-
-                out.write(("data: " + chunkObj.toString() + "\n\n").getBytes(StandardCharsets.UTF_8));
-                out.flush();
-                Thread.sleep(3);
-            }
-
-            out.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
-            out.flush();
-        } else {
-            JSONObject msg = new JSONObject();
-            msg.put("role", "assistant");
-            msg.put("content", content);
-
-            JSONObject choice = new JSONObject();
-            choice.put("index", 0);
-            choice.put("message", msg);
-            choice.put("finish_reason", "stop");
-
-            JSONArray choices = new JSONArray();
-            choices.put(choice);
-
-            JSONObject resObj = new JSONObject();
-            resObj.put("id", "chatcmpl-cache");
-            resObj.put("object", "chat.completion");
-            resObj.put("created", System.currentTimeMillis() / 1000);
-            resObj.put("model", cached.model);
-            resObj.put("system_fingerprint", "fp_cliproxy_cache");
-            resObj.put("choices", choices);
-
-            JSONObject usage = new JSONObject();
-            usage.put("prompt_tokens", 0);
-            usage.put("completion_tokens", cached.tokenCount);
-            usage.put("total_tokens", cached.tokenCount);
-            resObj.put("usage", usage);
-
-            byte[] jsonBytes = resObj.toString().getBytes(StandardCharsets.UTF_8);
-
-            StringBuilder res = new StringBuilder();
-            res.append("HTTP/1.1 200 OK\r\n");
-            res.append("Content-Type: application/json; charset=utf-8\r\n");
-            res.append("Content-Length: ").append(jsonBytes.length).append("\r\n");
-            res.append("Connection: close\r\n");
-            res.append("Access-Control-Allow-Origin: *\r\n");
-            res.append("X-Cache: HIT-LOCAL-5MS\r\n\r\n");
-
-            out.write(res.toString().getBytes(StandardCharsets.UTF_8));
-            out.write(jsonBytes);
-            out.flush();
-        }
-    }
-
-    private void relayAndCaptureResponse(InputStream inBackend, OutputStream outClient,
-                                         String cacheKey, String model, JSONArray messages, boolean isStream, GuestPolicy policy) {
-        StringBuilder capturedText = new StringBuilder();
-        long capturedOfficialTokens = 0;
-        long capturedIn = 0;
-        long capturedOut = 0;
-        long totalPayloadBytes = 0;
-        boolean settled = false;
-
-        try {
-            byte[] buffer = new byte[4096];
-            int n;
-            boolean streamDone = false;
-            while ((n = inBackend.read(buffer)) != -1) {
-                outClient.write(buffer, 0, n);
-                outClient.flush();
-                totalPayloadBytes += n;
-
-                String chunk = new String(buffer, 0, n, StandardCharsets.UTF_8);
-
-                // 嗅探 official usage
-                Matcher mTotal = PATTERN_TOTAL_TOKENS.matcher(chunk);
-                if (mTotal.find()) {
-                    try { capturedOfficialTokens = Long.parseLong(mTotal.group(1)); } catch (Exception ignored) {}
-                }
-                Matcher mIn = PATTERN_INPUT_TOKENS.matcher(chunk);
-                if (mIn.find()) {
-                    try { capturedIn = Long.parseLong(mIn.group(1)); } catch (Exception ignored) {}
-                }
-                Matcher mOut = PATTERN_OUTPUT_TOKENS.matcher(chunk);
-                if (mOut.find()) {
-                    try { capturedOut = Long.parseLong(mOut.group(1)); } catch (Exception ignored) {}
-                }
-
-                if (isStream) {
-                    String[] lines = chunk.split("\n");
-                    for (String line : lines) {
-                        if (line.contains("[DONE]")) {
-                            streamDone = true;
-                        }
-                        if (line.startsWith("data:") && (line.contains("\"content\":") || line.contains("\"text\":"))) {
-                            try {
-                                String jsonPart = line.substring(5).trim();
-                                if (!jsonPart.equals("[DONE]")) {
-                                    JSONObject obj = new JSONObject(jsonPart);
-                                    JSONArray choices = obj.optJSONArray("choices");
-                                    if (choices != null && choices.length() > 0) {
-                                        JSONObject d = choices.getJSONObject(0).optJSONObject("delta");
-                                        if (d != null) {
-                                            if (d.has("content")) capturedText.append(d.getString("content"));
-                                            else if (d.has("text")) capturedText.append(d.getString("text"));
-                                        }
-                                    }
-                                }
-                            } catch (Exception ignored) {}
-                        }
-                    }
-                    if (streamDone) {
-                        break;
-                    }
-                } else {
-                    capturedText.append(chunk);
-                    // 非流式下，若检测到 JSON 结尾大括号且包含 choices，可安全提前终止，杜绝 Keep-Alive 挂起
-                    if (chunk.contains("\"choices\"") && (chunk.endsWith("}\n") || chunk.endsWith("}\r\n") || chunk.endsWith("}"))) {
-                        break;
-                    }
-                }
-            }
-
-            if (capturedText.length() > 0 || totalPayloadBytes > 0) {
-                String fullContent = capturedText.toString();
-                if (!isStream) {
-                    try {
-                        int jsonStart = fullContent.indexOf("{");
-                        if (jsonStart != -1) {
-                            JSONObject res = new JSONObject(fullContent.substring(jsonStart));
-                            JSONArray choices = res.optJSONArray("choices");
-                            if (choices != null && choices.length() > 0) {
-                                fullContent = choices.getJSONObject(0).getJSONObject("message").getString("content");
-                            }
-                        }
-                    } catch (Exception ignored) {}
-                }
-
-                String summary = messages != null && messages.length() > 0 ? messages.getJSONObject(messages.length() - 1).optString("content", "") : "";
-                if (summary.length() > 60) summary = summary.substring(0, 60) + "...";
-
-                long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut, capturedText, totalPayloadBytes);
-                int tokensInt = (int) Math.min(Integer.MAX_VALUE, Math.max(1, finalTokens));
-
-                if (fullContent.length() > 0 && cacheKey != null) {
-                    ResponseCacheDb.getInstance(context).put(cacheKey, model, summary, fullContent, tokensInt);
-                }
-                settleTokens(finalTokens, policy);
-                settled = true;
-            }
-        } catch (Exception ignored) {
-        } finally {
-            if (!settled && totalPayloadBytes > 0) {
-                long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut, capturedText, totalPayloadBytes);
-                settleTokens(finalTokens, policy);
-                settled = true;
-            }
         }
     }
 
@@ -769,32 +482,6 @@ public class SmartCacheProxy {
             if (multiQuotaListener != null) {
                 multiQuotaListener.onQuotaChanged(policy.key, policy.quotaRemaining, policy.quotaTotal);
             }
-        }
-    }
-
-    private int findHeaderEnd(byte[] data) {
-        for (int i = 0; i < data.length - 3; i++) {
-            if (data[i] == '\r' && data[i + 1] == '\n' && data[i + 2] == '\r' && data[i + 3] == '\n') {
-                return i + 4;
-            }
-        }
-        return data.length;
-    }
-
-    private String computeCacheKey(String model, JSONArray messages) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update(model.getBytes(StandardCharsets.UTF_8));
-            md.update((byte) '\n');
-            md.update(messages.toString().getBytes(StandardCharsets.UTF_8));
-            byte[] hash = md.digest();
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return String.valueOf(messages.toString().hashCode());
         }
     }
 
