@@ -2975,6 +2975,10 @@ public class MainActivity extends Activity {
     }
 
     private void startTunnel() {
+        if (!BinaryDownloadManager.isGlibcReady(this)) {
+            showBinaryDownloadDialog("Glibc 基础运行库", BinaryDownloadManager.KEY_GLIBC, this::startTunnel);
+            return;
+        }
         if (!BinaryDownloadManager.isCloudflaredReady(this)) {
             showBinaryDownloadDialog("Cloudflare 穿透组件", BinaryDownloadManager.KEY_CLOUDFLARED, this::startTunnel);
             return;

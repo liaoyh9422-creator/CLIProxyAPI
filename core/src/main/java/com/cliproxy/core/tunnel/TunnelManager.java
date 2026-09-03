@@ -52,6 +52,14 @@ public class TunnelManager {
                 return;
             }
 
+            if (!prootManager.setupGlibcLibs()) {
+                writeTunnelLog("❌ Glibc 基础运行库就绪检测失败，无法启动隧道\n");
+                if (listener != null) listener.onStatus("隧道启动失败");
+                return;
+            }
+
+            prootManager.setupRootfs();
+
             File filesDir = context.getFilesDir();
             List<String> cmdParts = prootManager.buildProotCommand("/app");
 
@@ -122,8 +130,15 @@ public class TunnelManager {
             if (listener != null) listener.onStatus("隧道已停止 (exit " + exitCode + ")");
         } catch (Exception e) {
             Log.e(TAG, "Tunnel start failed", e);
-            writeTunnelLog("❌ 隧道启动失败: " + e.getMessage() + "\n");
-            if (listener != null) listener.onStatus("隧道启动失败");
+            String msg = e.getMessage();
+            if (msg == null || msg.trim().isEmpty()) {
+                msg = e.getClass().getSimpleName();
+            }
+            writeTunnelLog("❌ 隧道启动失败: " + msg + "\n");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            e.printStackTrace(new java.io.PrintWriter(sw));
+            writeTunnelLog(sw.toString() + "\n");
+            if (listener != null) listener.onStatus("隧道启动失败 (" + msg + ")");
         }
     }
 

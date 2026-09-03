@@ -38,6 +38,10 @@ public class ProotManager {
         this.filesDirPath = context.getFilesDir().getAbsolutePath();
         this.tmpDirPath = new File(context.getCacheDir(), "tmp").getAbsolutePath();
         new File(tmpDirPath).mkdirs();
+        File glibcDir = new File(context.getFilesDir(), "glibc");
+        this.libPath = new File(glibcDir, "usr/lib64").getAbsolutePath();
+        File rootfs = new File(context.getFilesDir(), "proot-rootfs");
+        this.rootfsPath = rootfs.getAbsolutePath();
     }
 
     /** 初始化并检测核心 PRoot 原生库是否存在 */
@@ -45,6 +49,12 @@ public class ProotManager {
         prootPath = getNativeLib("libproot.so");
         loaderPath = getNativeLib("libloader.so");
         linkerPath = getNativeLib("libldlinux.so");
+        if (linkerPath == null) {
+            File ld = new File(context.getFilesDir(), "glibc/lib/ld-linux-aarch64.so.1");
+            if (ld.exists()) {
+                linkerPath = ld.getAbsolutePath();
+            }
+        }
         cliproxyPath = getNativeLib("libcliproxy.so");
 
         if (cliproxyPath == null) {
@@ -61,8 +71,8 @@ public class ProotManager {
             }
         }
 
-        Log.d(TAG, "PRoot 核心组件探测: proot=" + prootPath + ", linker=" + linkerPath + ", cliproxy=" + cliproxyPath);
-        return prootPath != null && loaderPath != null && linkerPath != null && cliproxyPath != null;
+        Log.d(TAG, "PRoot 核心组件探测: proot=" + prootPath + ", loader=" + loaderPath + ", linker=" + linkerPath + ", cliproxy=" + cliproxyPath);
+        return prootPath != null && loaderPath != null && linkerPath != null;
     }
 
     public boolean isCliproxyReady() {
@@ -253,6 +263,13 @@ public class ProotManager {
 
     /** 拼装基础 PRoot 沙箱命令参数列表 */
     public List<String> buildProotCommand(String workDir) {
+        if (rootfsPath == null || !new File(rootfsPath).exists()) {
+            setupRootfs();
+        }
+        if (libPath == null || !new File(libPath).exists()) {
+            setupGlibcLibs();
+        }
+
         List<String> cmd = new ArrayList<>();
         cmd.add(prootPath);
         cmd.add("-r"); cmd.add(rootfsPath);
@@ -265,33 +282,42 @@ public class ProotManager {
         cmd.add("-b"); cmd.add("/data");
         cmd.add("-b"); cmd.add("/sdcard");
         cmd.add("-b"); cmd.add("/storage");
-        cmd.add("-b"); cmd.add(linkerPath + ":/lib/ld-linux-aarch64.so.1");
-        cmd.add("-b"); cmd.add(libPath + ":/usr/lib64");
-        cmd.add("-b"); cmd.add(libPath + ":/lib64");
+        if (linkerPath != null) {
+            cmd.add("-b"); cmd.add(linkerPath + ":/lib/ld-linux-aarch64.so.1");
+        }
+        if (libPath != null) {
+            cmd.add("-b"); cmd.add(libPath + ":/usr/lib64");
+            cmd.add("-b"); cmd.add(libPath + ":/lib64");
 
-        File binDir = new File(new File(libPath).getParentFile(), "bin");
-        if (binDir.isDirectory()) {
-            cmd.add("-b"); cmd.add(binDir.getAbsolutePath() + ":/usr/bin");
+            File parent = new File(libPath).getParentFile();
+            if (parent != null) {
+                File binDir = new File(parent, "bin");
+                if (binDir.isDirectory()) {
+                    cmd.add("-b"); cmd.add(binDir.getAbsolutePath() + ":/usr/bin");
+                }
+            }
         }
         cmd.add("-b"); cmd.add(filesDirPath + ":/app");
         cmd.add("-b"); cmd.add(tmpDirPath + ":/tmp");
 
-        File etcDir = new File(rootfsPath, "etc");
-        File resolvConf = new File(etcDir, "resolv.conf");
-        if (resolvConf.exists()) {
-            cmd.add("-b"); cmd.add(resolvConf.getAbsolutePath() + ":/etc/resolv.conf");
-        }
-        File nsswitchConf = new File(etcDir, "nsswitch.conf");
-        if (nsswitchConf.exists()) {
-            cmd.add("-b"); cmd.add(nsswitchConf.getAbsolutePath() + ":/etc/nsswitch.conf");
-        }
-        File hostsFile = new File(etcDir, "hosts");
-        if (hostsFile.exists()) {
-            cmd.add("-b"); cmd.add(hostsFile.getAbsolutePath() + ":/etc/hosts");
-        }
-        File mergedCert = new File(etcDir, "ssl/certs/ca-certificates.crt");
-        if (mergedCert.exists()) {
-            cmd.add("-b"); cmd.add(mergedCert.getAbsolutePath() + ":/etc/ssl/certs/ca-certificates.crt");
+        if (rootfsPath != null) {
+            File etcDir = new File(rootfsPath, "etc");
+            File resolvConf = new File(etcDir, "resolv.conf");
+            if (resolvConf.exists()) {
+                cmd.add("-b"); cmd.add(resolvConf.getAbsolutePath() + ":/etc/resolv.conf");
+            }
+            File nsswitchConf = new File(etcDir, "nsswitch.conf");
+            if (nsswitchConf.exists()) {
+                cmd.add("-b"); cmd.add(nsswitchConf.getAbsolutePath() + ":/etc/nsswitch.conf");
+            }
+            File hostsFile = new File(etcDir, "hosts");
+            if (hostsFile.exists()) {
+                cmd.add("-b"); cmd.add(hostsFile.getAbsolutePath() + ":/etc/hosts");
+            }
+            File mergedCert = new File(etcDir, "ssl/certs/ca-certificates.crt");
+            if (mergedCert.exists()) {
+                cmd.add("-b"); cmd.add(mergedCert.getAbsolutePath() + ":/etc/ssl/certs/ca-certificates.crt");
+            }
         }
         return cmd;
     }
