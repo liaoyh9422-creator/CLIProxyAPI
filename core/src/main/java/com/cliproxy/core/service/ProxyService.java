@@ -399,6 +399,7 @@ public class ProxyService extends Service {
 
     /** 停止底层代理进程与缓存代理 */
     private void stopProxyServer() {
+        MetricsTracker.getInstance().markServerStop();
         MdnsManager.getInstance(this).stop();
         if (smartCacheProxy != null) {
             smartCacheProxy.stop();

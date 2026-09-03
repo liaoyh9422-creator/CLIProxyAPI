@@ -293,6 +293,32 @@ public class SmartCacheProxy {
                     boolean isStream = reqJson.optBoolean("stream", false);
                     JSONArray messages = reqJson.optJSONArray("messages");
 
+                    // 检测是否包含工具调用（tools / functions / tool_choice / role=tool）
+                    boolean hasTools = reqJson.has("tools") || reqJson.has("functions") || reqJson.has("tool_choice");
+                    if (!hasTools && messages != null) {
+                        for (int mi = 0; mi < messages.length(); mi++) {
+                            JSONObject mObj = messages.optJSONObject(mi);
+                            if (mObj != null) {
+                                String role = mObj.optString("role");
+                                if ("tool".equals(role) || "function".equals(role) || mObj.has("tool_calls")) {
+                                    hasTools = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (hasTools) {
+                        // 带有工具调用的动态交互，智能绕过静态缓存，走极速原生双向直通管道，绝不阻塞卡死！
+                        backendSocket = new Socket("127.0.0.1", backendPort);
+                        backendSocket.setTcpNoDelay(true);
+                        backendSocket.getOutputStream().write(rawHeaderBytes, 0, headerEndIdx);
+                        backendSocket.getOutputStream().write(bodyBytes);
+                        backendSocket.getOutputStream().flush();
+                        pipeSockets(clientSocket, backendSocket, activePolicy);
+                        return;
+                    }
+
                     if (messages != null && messages.length() > 0) {
                         String cacheKey = computeCacheKey(model, messages);
                         ResponseCacheDb db = ResponseCacheDb.getInstance(context);
@@ -434,6 +460,7 @@ public class SmartCacheProxy {
         try {
             byte[] buffer = new byte[4096];
             int n;
+            boolean streamDone = false;
             while ((n = inBackend.read(buffer)) != -1) {
                 outClient.write(buffer, 0, n);
                 outClient.flush();
@@ -442,6 +469,9 @@ public class SmartCacheProxy {
                 if (isStream) {
                     String[] lines = chunk.split("\n");
                     for (String line : lines) {
+                        if (line.contains("[DONE]")) {
+                            streamDone = true;
+                        }
                         if (line.startsWith("data:") && line.contains("\"content\":")) {
                             try {
                                 String jsonPart = line.substring(5).trim();
@@ -458,8 +488,15 @@ public class SmartCacheProxy {
                             } catch (Exception ignored) {}
                         }
                     }
+                    if (streamDone) {
+                        break;
+                    }
                 } else {
                     capturedText.append(chunk);
+                    // 非流式下，若检测到 JSON 结尾大括号且包含 choices，可安全提前终止，杜绝 Keep-Alive 挂起
+                    if (chunk.contains("\"choices\"") && (chunk.endsWith("}\n") || chunk.endsWith("}\r\n") || chunk.endsWith("}"))) {
+                        break;
+                    }
                 }
             }
 
@@ -483,6 +520,7 @@ public class SmartCacheProxy {
                 int tokens = Math.max(1, fullContent.length() / 4);
 
                 ResponseCacheDb.getInstance(context).put(cacheKey, model, summary, fullContent, tokens);
+                MetricsTracker.getInstance().addTokens(tokens);
 
                 if (policy != null && "TOKEN".equals(policy.mode)) {
                     policy.quotaRemaining = Math.max(0, policy.quotaRemaining - tokens);
@@ -521,23 +559,23 @@ public class SmartCacheProxy {
             while ((r = is.read(b)) != -1) {
                 os.write(b, 0, r);
                 os.flush();
-                if (policy != null && "TOKEN".equals(policy.mode)) {
-                    totalBytes += r;
-                    if (capturedTokens == 0 && r > 20) {
-                        String chunkStr = new String(b, 0, r, StandardCharsets.UTF_8);
-                        Matcher m = tokenPattern.matcher(chunkStr);
-                        if (m.find()) {
-                            try {
-                                capturedTokens = Long.parseLong(m.group(1));
-                            } catch (Exception ignored) {}
-                        }
+                totalBytes += r;
+                if (capturedTokens == 0 && r > 20) {
+                    String chunkStr = new String(b, 0, r, StandardCharsets.UTF_8);
+                    Matcher m = tokenPattern.matcher(chunkStr);
+                    if (m.find()) {
+                        try {
+                            capturedTokens = Long.parseLong(m.group(1));
+                        } catch (Exception ignored) {}
                     }
                 }
             }
 
+            long finalTokens = (capturedTokens > 0) ? capturedTokens : Math.max(1, totalBytes / 4);
+            MetricsTracker.getInstance().addTokens(finalTokens);
+
             if (policy != null && "TOKEN".equals(policy.mode)) {
-                long toDeduct = (capturedTokens > 0) ? capturedTokens : Math.max(1, totalBytes / 4);
-                policy.quotaRemaining = Math.max(0, policy.quotaRemaining - toDeduct);
+                policy.quotaRemaining = Math.max(0, policy.quotaRemaining - finalTokens);
                 if (multiQuotaListener != null) {
                     multiQuotaListener.onQuotaChanged(policy.key, policy.quotaRemaining, policy.quotaTotal);
                 }

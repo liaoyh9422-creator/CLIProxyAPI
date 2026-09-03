@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -133,13 +134,28 @@ public class MainActivity extends Activity {
 
     // Metrics 仪表与智能缓存组件
     private TextView metricTotalRequests;
+    private TextView metricFailedRequests;
     private TextView metricAvgLatency;
-    private TextView metricSuccessRate;
+    private TextView metricTotalTokens;
+    private TextView metricSavedTokens;
     private TextView metricUptime;
     private TextView metricCacheHits;
-    private TextView metricSavedTokens;
     private TextView metricCachedCount;
     private LinearLayout metricsLogList;
+    private int auditFilterMode = 0; // 0: 全部, 1: 仅失败, 2: 仅秒回
+    private final TextView[] auditFilterPills = new TextView[3];
+
+    // 请求端点自动轮换变换组件
+    private final String[] ENDPOINT_SUFFIXES = {"/v1", "/v1/chat/completions", "/v1/responses"};
+    private final String[] ENDPOINT_LABELS = {"Base /v1", "/chat", "/responses"};
+    private int lanEndpointIndex = 0;
+    private TextView lanEndpointUrlView;
+    private final TextView[] lanEndpointPills = new TextView[3];
+    private String currentLanPrefix = "";
+
+    private int tunnelEndpointIndex = 0;
+    private TextView tunnelEndpointUrlView;
+    private final TextView[] tunnelEndpointPills = new TextView[3];
 
     // ==================== 1. 生命周期与权限配置 ====================
 
@@ -569,7 +585,7 @@ public class MainActivity extends Activity {
         addressCardContainer.addView(top);
 
         if (!currentTunnelDomain.isEmpty()) {
-            addressCardContainer.addView(buildAddressRow("全球公网直连 (Cloudflare)", currentTunnelDomain + "/v1"));
+            addressCardContainer.addView(buildCyclingEndpointRow("全球公网请求端点 (Cloudflare)", currentTunnelDomain, true));
             View divExt = new View(this);
             divExt.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
             LinearLayout.LayoutParams dlpe = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
@@ -578,14 +594,12 @@ public class MainActivity extends Activity {
             addressCardContainer.addView(divExt, dlpe);
         }
 
-        // 第 1 行：局域网端点 (根据 mDNS 状态切换)
-        if (isMdnsOn) {
-            addressCardContainer.addView(buildAddressRow("局域网直连 (仅家庭或私有wifi)",
-                    "http://" + MdnsManager.HOST_NAME + ":" + appConfig.getPort() + "/v1"));
-        } else {
-            addressCardContainer.addView(buildAddressRow("局域网 IP 直连",
-                    "http://" + getLanIpAddress() + ":" + appConfig.getPort() + "/v1"));
-        }
+        String lanPrefix = isMdnsOn ?
+                ("http://" + MdnsManager.HOST_NAME + ":" + appConfig.getPort()) :
+                ("http://" + getLanIpAddress() + ":" + appConfig.getPort());
+        addressCardContainer.addView(buildCyclingEndpointRow(
+                isMdnsOn ? "局域网请求端点 (mDNS)" : "局域网请求端点",
+                lanPrefix, false));
 
         View div1 = new View(this);
         div1.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
@@ -594,28 +608,124 @@ public class MainActivity extends Activity {
         dlp1.bottomMargin = UiTheme.dp(this, 4);
         addressCardContainer.addView(div1, dlp1);
 
-        // 第 2 行：主流客户端 (chat/completions)
-        addressCardContainer.addView(buildAddressRow("主流客户端", appConfig.getChatUrl()));
-
-        View div2 = new View(this);
-        div2.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
-        LinearLayout.LayoutParams dlp2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
-        dlp2.topMargin = UiTheme.dp(this, 4);
-        dlp2.bottomMargin = UiTheme.dp(this, 4);
-        addressCardContainer.addView(div2, dlp2);
-
-        // 第 3 行：新一代API (responses)
-        addressCardContainer.addView(buildAddressRow("新一代API", appConfig.getResponsesUrl()));
-
-        View div3 = new View(this);
-        div3.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
-        LinearLayout.LayoutParams dlp3 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
-        dlp3.topMargin = UiTheme.dp(this, 4);
-        dlp3.bottomMargin = UiTheme.dp(this, 4);
-        addressCardContainer.addView(div3, dlp3);
-
-        // 第 4 行：访问密钥 (API Key)
+        // 访问密钥 (API Key)
         addressCardContainer.addView(buildApiKeyRow());
+    }
+
+    /** 构建支持自动轮播变换的请求端点行组件 */
+    private View buildCyclingEndpointRow(String title, String hostPrefix, boolean isTunnel) {
+        if (!isTunnel) {
+            currentLanPrefix = hostPrefix;
+        }
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, UiTheme.dp(this, 4), 0, UiTheme.dp(this, 4));
+
+        // 顶层标题与自动轮换微型胶囊
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView label = new TextView(this);
+        label.setText("● " + title);
+        label.setTextSize(10.5f);
+        label.setTextColor(Color.parseColor(UiTheme.C_BLUE));
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        top.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout pillsContainer = new LinearLayout(this);
+        pillsContainer.setOrientation(LinearLayout.HORIZONTAL);
+
+        TextView[] pills = isTunnel ? tunnelEndpointPills : lanEndpointPills;
+        int activeIdx = isTunnel ? tunnelEndpointIndex : lanEndpointIndex;
+
+        for (int i = 0; i < 3; i++) {
+            final int pillIdx = i;
+            boolean active = (i == activeIdx);
+            TextView pill = UiTheme.createButton(this, ENDPOINT_LABELS[i],
+                    active ? UiTheme.C_GREEN : UiTheme.C_DIM,
+                    active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                    active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 3);
+            pill.setTextSize(9f);
+            pill.setPadding(UiTheme.dp(this, 6), UiTheme.dp(this, 2), UiTheme.dp(this, 6), UiTheme.dp(this, 2));
+
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (i > 0) plp.leftMargin = UiTheme.dp(this, 4);
+            pill.setLayoutParams(plp);
+
+            pill.setOnClickListener(v -> {
+                if (isTunnel) {
+                    tunnelEndpointIndex = pillIdx;
+                } else {
+                    lanEndpointIndex = pillIdx;
+                }
+                updateCyclingEndpointsUI();
+            });
+
+            pills[i] = pill;
+            pillsContainer.addView(pill);
+        }
+        top.addView(pillsContainer);
+        row.addView(top);
+
+        // 底层端点地址展示与复制按钮
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        bottom.setGravity(Gravity.CENTER_VERTICAL);
+        bottom.setPadding(0, UiTheme.dp(this, 3), 0, 0);
+
+        TextView tvUrl = new TextView(this);
+        tvUrl.setTextSize(10.5f);
+        tvUrl.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvUrl.setTypeface(Typeface.MONOSPACE);
+        tvUrl.setText(hostPrefix + ENDPOINT_SUFFIXES[activeIdx]);
+        tvUrl.setSingleLine(true);
+        tvUrl.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        bottom.addView(tvUrl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        if (isTunnel) {
+            tunnelEndpointUrlView = tvUrl;
+        } else {
+            lanEndpointUrlView = tvUrl;
+        }
+
+        TextView copyBtn = UiTheme.createButton(this, "复制", UiTheme.C_TEXT, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
+        copyBtn.setOnClickListener(v -> copyToClipboard(title, tvUrl.getText().toString()));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.leftMargin = UiTheme.dp(this, 6);
+        copyBtn.setLayoutParams(clp);
+        bottom.addView(copyBtn);
+
+        row.addView(bottom);
+        return row;
+    }
+
+    private void updateCyclingEndpointsUI() {
+        if (lanEndpointUrlView != null && !currentLanPrefix.isEmpty()) {
+            lanEndpointUrlView.setText(currentLanPrefix + ENDPOINT_SUFFIXES[lanEndpointIndex]);
+            for (int i = 0; i < 3; i++) {
+                if (lanEndpointPills[i] != null) {
+                    boolean active = (i == lanEndpointIndex);
+                    lanEndpointPills[i].setTextColor(Color.parseColor(active ? UiTheme.C_GREEN : UiTheme.C_DIM));
+                    lanEndpointPills[i].setBackground(UiTheme.roundRect(this,
+                            active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                            active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
+                }
+            }
+        }
+        if (tunnelEndpointUrlView != null && !currentTunnelDomain.isEmpty()) {
+            tunnelEndpointUrlView.setText(currentTunnelDomain + ENDPOINT_SUFFIXES[tunnelEndpointIndex]);
+            for (int i = 0; i < 3; i++) {
+                if (tunnelEndpointPills[i] != null) {
+                    boolean active = (i == tunnelEndpointIndex);
+                    tunnelEndpointPills[i].setTextColor(Color.parseColor(active ? UiTheme.C_GREEN : UiTheme.C_DIM));
+                    tunnelEndpointPills[i].setBackground(UiTheme.roundRect(this,
+                            active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                            active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
+                }
+            }
+        }
     }
 
     private String maskKey(String key) {
@@ -1401,25 +1511,7 @@ public class MainActivity extends Activity {
             urlRow.addView(btnTunnelUrlCopy);
             tunnelEndpointsContainer.addView(urlRow);
         } else {
-            tunnelEndpointsContainer.addView(buildAddressRow("公网 Base URL (推荐好友填入)", currentTunnelDomain + "/v1"));
-
-            View d1 = new View(this);
-            d1.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
-            LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
-            lp1.topMargin = UiTheme.dp(this, 3);
-            lp1.bottomMargin = UiTheme.dp(this, 3);
-            tunnelEndpointsContainer.addView(d1, lp1);
-
-            tunnelEndpointsContainer.addView(buildAddressRow("主流客户端", currentTunnelDomain + "/v1/chat/completions"));
-
-            View d2 = new View(this);
-            d2.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
-            LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
-            lp2.topMargin = UiTheme.dp(this, 3);
-            lp2.bottomMargin = UiTheme.dp(this, 3);
-            tunnelEndpointsContainer.addView(d2, lp2);
-
-            tunnelEndpointsContainer.addView(buildAddressRow("新一代API", currentTunnelDomain + "/v1/responses"));
+            tunnelEndpointsContainer.addView(buildCyclingEndpointRow("公网请求端点", currentTunnelDomain, true));
         }
     }
 
@@ -1977,8 +2069,8 @@ public class MainActivity extends Activity {
                 "1. NextChat / Chatbox：在设置中将 API 地址填为上方 Base URL，密钥填入 API Key；\n" +
                 "2. 沉浸式翻译：接口类型选 OpenAI，模型选 grok-3-mini；\n" +
                 "3. 直达完整端点：\n" +
-                "   - 主流客户端: " + chatUrl + "\n" +
-                "   - 新一代API: " + respUrl;
+                "   - 聊天接口: " + chatUrl + "\n" +
+                "   - 响应接口: " + respUrl;
 
         copyToClipboard("分享卡片", content);
         Toast.makeText(this, "已复制【" + remark + "】专属分享卡片，可直接发微信好友！", Toast.LENGTH_SHORT).show();
@@ -2326,13 +2418,14 @@ public class MainActivity extends Activity {
     }
 
     /** 核心指标四宫格卡片 */
+    /** 核心指标六宫格卡片 */
     private View buildKpiGridSection() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 6));
         card.setPadding(UiTheme.dp(this, 10), UiTheme.dp(this, 8), UiTheme.dp(this, 10), UiTheme.dp(this, 8));
 
-        // 第 1 行: 今日请求数 + 平均延迟
+        // 第 1 行: 今日请求数 + 失败请求 + 平均延迟
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -2340,9 +2433,13 @@ public class MainActivity extends Activity {
         metricTotalRequests = kpi1.findViewById(android.R.id.text1);
         row1.addView(kpi1, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        View kpi2 = createKpiItem("平均延迟", "0 ms", UiTheme.C_CYAN);
-        metricAvgLatency = kpi2.findViewById(android.R.id.text1);
+        View kpi2 = createKpiItem("失败请求", "0 (0.0%)", UiTheme.C_GREEN);
+        metricFailedRequests = kpi2.findViewById(android.R.id.text1);
         row1.addView(kpi2, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        View kpi3 = createKpiItem("平均延迟", "0 ms", UiTheme.C_CYAN);
+        metricAvgLatency = kpi3.findViewById(android.R.id.text1);
+        row1.addView(kpi3, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         card.addView(row1);
 
         View div = new View(this);
@@ -2352,17 +2449,21 @@ public class MainActivity extends Activity {
         dlp.bottomMargin = UiTheme.dp(this, 6);
         card.addView(div, dlp);
 
-        // 第 2 行: 成功率 + 运行时间
+        // 第 2 行: Token总消耗 + 节省Token + 运行时长
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
 
-        View kpi3 = createKpiItem("请求成功率", "100.0%", UiTheme.C_GREEN);
-        metricSuccessRate = kpi3.findViewById(android.R.id.text1);
-        row2.addView(kpi3, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        View kpi4 = createKpiItem("已运行时长", "00分 00秒", UiTheme.C_PURPLE);
-        metricUptime = kpi4.findViewById(android.R.id.text1);
+        View kpi4 = createKpiItem("Token 总消耗", "0", "#E3B341");
+        metricTotalTokens = kpi4.findViewById(android.R.id.text1);
         row2.addView(kpi4, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        View kpi5 = createKpiItem("节省 Token", "~0", UiTheme.C_GREEN);
+        metricSavedTokens = kpi5.findViewById(android.R.id.text1);
+        row2.addView(kpi5, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        View kpi6 = createKpiItem("已运行时长", "未运行", UiTheme.C_PURPLE);
+        metricUptime = kpi6.findViewById(android.R.id.text1);
+        row2.addView(kpi6, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         card.addView(row2);
 
         return card;
@@ -2438,13 +2539,9 @@ public class MainActivity extends Activity {
         metricCacheHits = item1.findViewById(android.R.id.text1);
         row.addView(item1, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        View item2 = createKpiItem("节省 Token", "~0", "#E3B341");
-        metricSavedTokens = item2.findViewById(android.R.id.text1);
+        View item2 = createKpiItem("已缓存词条", "0 条", UiTheme.C_PURPLE);
+        metricCachedCount = item2.findViewById(android.R.id.text1);
         row.addView(item2, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        View item3 = createKpiItem("已缓存词条", "0 条", UiTheme.C_PURPLE);
-        metricCachedCount = item3.findViewById(android.R.id.text1);
-        row.addView(item3, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         card.addView(row);
         return card;
@@ -2464,7 +2561,7 @@ public class MainActivity extends Activity {
         TextView tvVal = new TextView(this);
         tvVal.setId(android.R.id.text1);
         tvVal.setText(defaultValue);
-        tvVal.setTextSize(15);
+        tvVal.setTextSize(14);
         tvVal.setTypeface(Typeface.DEFAULT_BOLD);
         tvVal.setTextColor(Color.parseColor(accentColor));
         tvVal.setPadding(0, UiTheme.dp(this, 2), 0, 0);
@@ -2473,7 +2570,7 @@ public class MainActivity extends Activity {
         return box;
     }
 
-    /** 访问审计流水区 */
+    /** 访问审计流水区（带筛选胶囊） */
     private View buildAuditSection() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -2486,19 +2583,45 @@ public class MainActivity extends Activity {
         top.setPadding(0, 0, 0, UiTheme.dp(this, 4));
 
         TextView title = new TextView(this);
-        title.setText("最近访问审计 (50条)");
+        title.setText("最近访问审计");
         title.setTextSize(11.5f);
         title.setTextColor(Color.parseColor(UiTheme.C_TEXT));
         title.setTypeface(Typeface.DEFAULT_BOLD);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        // 筛选胶囊：全部 / 仅看失败 / 仅看秒回
+        String[] filterTitles = {"全部", "🔴 仅失败", "⚡ 仅秒回"};
+        for (int i = 0; i < 3; i++) {
+            final int fIdx = i;
+            boolean active = (auditFilterMode == i);
+            TextView pill = UiTheme.createButton(this, filterTitles[i],
+                    active ? UiTheme.C_GREEN : UiTheme.C_DIM,
+                    active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                    active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 3);
+            pill.setTextSize(9f);
+            pill.setPadding(UiTheme.dp(this, 5), UiTheme.dp(this, 2), UiTheme.dp(this, 5), UiTheme.dp(this, 2));
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            plp.leftMargin = UiTheme.dp(this, 4);
+            pill.setLayoutParams(plp);
+            pill.setOnClickListener(v -> {
+                auditFilterMode = fIdx;
+                updateAuditFilterPills();
+                refreshMetricsView();
+            });
+            auditFilterPills[i] = pill;
+            top.addView(pill);
+        }
+
         TextView refreshBtn = UiTheme.createButton(this, "⟳", UiTheme.C_TEXT, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
+        LinearLayout.LayoutParams rfp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rfp.leftMargin = UiTheme.dp(this, 4);
+        refreshBtn.setLayoutParams(rfp);
         refreshBtn.setOnClickListener(v -> refreshMetricsView());
         top.addView(refreshBtn);
 
         TextView resetBtn = UiTheme.createButton(this, "重置", UiTheme.C_DIM, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rlp.leftMargin = UiTheme.dp(this, 5);
+        rlp.leftMargin = UiTheme.dp(this, 4);
         resetBtn.setLayoutParams(rlp);
         resetBtn.setOnClickListener(v -> {
             MetricsTracker.getInstance().reset();
@@ -2522,16 +2645,43 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    private void updateAuditFilterPills() {
+        for (int i = 0; i < 3; i++) {
+            if (auditFilterPills[i] != null) {
+                boolean active = (auditFilterMode == i);
+                auditFilterPills[i].setTextColor(Color.parseColor(active ? UiTheme.C_GREEN : UiTheme.C_DIM));
+                auditFilterPills[i].setBackground(UiTheme.roundRect(this,
+                        active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                        active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
+            }
+        }
+    }
+
     private void refreshMetricsView() {
         MetricsTracker mt = MetricsTracker.getInstance();
         if (metricTotalRequests != null) {
             metricTotalRequests.setText(String.valueOf(mt.getTotalRequests()));
         }
+        if (metricFailedRequests != null) {
+            long fails = mt.getFailedRequests();
+            float rate = mt.getFailureRate();
+            if (fails > 0) {
+                metricFailedRequests.setText(String.format(Locale.getDefault(), "%d (%.1f%%)", fails, rate));
+                metricFailedRequests.setTextColor(Color.parseColor(UiTheme.C_RED));
+            } else {
+                metricFailedRequests.setText("0 (0.0%)");
+                metricFailedRequests.setTextColor(Color.parseColor(UiTheme.C_GREEN));
+            }
+        }
         if (metricAvgLatency != null) {
             metricAvgLatency.setText(mt.getAverageLatencyMs() + " ms");
         }
-        if (metricSuccessRate != null) {
-            metricSuccessRate.setText(String.format(Locale.getDefault(), "%.1f%%", mt.getSuccessRate()));
+        if (metricTotalTokens != null) {
+            metricTotalTokens.setText(mt.getFormattedTotalTokens());
+        }
+        if (metricSavedTokens != null) {
+            ResponseCacheDb cacheDb = ResponseCacheDb.getInstance(this);
+            metricSavedTokens.setText("~" + cacheDb.getTotalSavedTokens());
         }
         if (metricUptime != null) {
             metricUptime.setText(mt.getFormattedUptime());
@@ -2541,19 +2691,25 @@ public class MainActivity extends Activity {
         if (metricCacheHits != null) {
             metricCacheHits.setText(cacheDb.getTotalHits() + " 次");
         }
-        if (metricSavedTokens != null) {
-            metricSavedTokens.setText("~" + cacheDb.getTotalSavedTokens());
-        }
         if (metricCachedCount != null) {
             metricCachedCount.setText(cacheDb.getCachedEntriesCount() + " 条");
         }
 
         if (metricsLogList != null) {
             metricsLogList.removeAllViews();
-            List<MetricsTracker.RequestRecord> list = mt.getRecentRecords();
+            List<MetricsTracker.RequestRecord> rawList = mt.getRecentRecords();
+            List<MetricsTracker.RequestRecord> list = new ArrayList<>();
+            for (MetricsTracker.RequestRecord r : rawList) {
+                if (auditFilterMode == 1 && r.isSuccess()) continue; // 仅看失败
+                if (auditFilterMode == 2 && !r.isCacheHit) continue; // 仅看秒回
+                list.add(r);
+            }
+
             if (list.isEmpty()) {
                 TextView empty = new TextView(this);
-                empty.setText("暂无调用记录（启动服务后通过客户端发起请求即可记录）");
+                empty.setText(auditFilterMode == 1 ? "暂无失败记录 (大模型请求全部正常)" :
+                             (auditFilterMode == 2 ? "暂无缓存秒回记录 (开启智能缓存后重复请求可命中)" :
+                             "暂无调用记录（启动服务后通过客户端发起请求即可记录）"));
                 empty.setTextSize(10.5f);
                 empty.setTextColor(Color.parseColor(UiTheme.C_DIM));
                 empty.setPadding(UiTheme.dp(this, 4), UiTheme.dp(this, 8), UiTheme.dp(this, 4), UiTheme.dp(this, 8));
@@ -2565,21 +2721,31 @@ public class MainActivity extends Activity {
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(0, UiTheme.dp(this, 3), 0, UiTheme.dp(this, 3));
+                row.setPadding(UiTheme.dp(this, 2), UiTheme.dp(this, 3), UiTheme.dp(this, 2), UiTheme.dp(this, 3));
+                row.setOnClickListener(v -> showRequestDetailsDialog(rec));
 
-                // 状态码徽章（区分普通请求与缓存秒回请求）
+                // 状态码徽章
                 TextView badge = new TextView(this);
-                boolean isCacheHit = rec.path.contains("缓存") || "5ms".equals(rec.latency);
-                boolean ok = (rec.statusCode >= 200 && rec.statusCode < 400);
-
-                if (isCacheHit) {
+                if (rec.isCacheHit) {
                     badge.setText("⚡200 CACHE");
                     badge.setTextColor(Color.parseColor(UiTheme.C_CYAN));
                     badge.setBackground(UiTheme.roundRect(this, "#0A2328", UiTheme.C_CYAN, 1, 2));
+                } else if (rec.statusCode == 429) {
+                    badge.setText("429 限流");
+                    badge.setTextColor(Color.parseColor("#E3B341"));
+                    badge.setBackground(UiTheme.roundRect(this, "#28200A", "#E3B341", 1, 2));
+                } else if (rec.statusCode == 401 || rec.statusCode == 403) {
+                    badge.setText(rec.statusCode + " 未授权");
+                    badge.setTextColor(Color.parseColor(UiTheme.C_RED));
+                    badge.setBackground(UiTheme.roundRect(this, "#2D1214", UiTheme.C_RED, 1, 2));
+                } else if (rec.statusCode >= 500) {
+                    badge.setText(rec.statusCode + " 错误");
+                    badge.setTextColor(Color.parseColor(UiTheme.C_RED));
+                    badge.setBackground(UiTheme.roundRect(this, "#2D1214", UiTheme.C_RED, 1, 2));
                 } else {
-                    badge.setText(String.valueOf(rec.statusCode));
-                    badge.setTextColor(Color.parseColor(ok ? UiTheme.C_GREEN : UiTheme.C_RED));
-                    badge.setBackground(UiTheme.roundRect(this, ok ? "#0D2818" : "#2D1214", ok ? UiTheme.C_GREEN : UiTheme.C_RED, 1, 2));
+                    badge.setText(rec.statusCode + " OK");
+                    badge.setTextColor(Color.parseColor(UiTheme.C_GREEN));
+                    badge.setBackground(UiTheme.roundRect(this, "#0D2818", UiTheme.C_GREEN, 1, 2));
                 }
                 badge.setTextSize(9);
                 badge.setTypeface(Typeface.MONOSPACE);
@@ -2589,17 +2755,19 @@ public class MainActivity extends Activity {
                 // 延迟
                 TextView tvLat = new TextView(this);
                 tvLat.setText(" " + rec.latency);
-                tvLat.setTextSize(10);
-                tvLat.setTextColor(Color.parseColor(isCacheHit ? UiTheme.C_GREEN : UiTheme.C_CYAN));
+                tvLat.setTextSize(9.5f);
+                tvLat.setTextColor(Color.parseColor(rec.isCacheHit ? UiTheme.C_GREEN : UiTheme.C_CYAN));
                 tvLat.setTypeface(Typeface.MONOSPACE);
                 row.addView(tvLat);
 
                 // 路径
                 TextView tvPath = new TextView(this);
                 tvPath.setText(" " + rec.method + " " + rec.path);
-                tvPath.setTextSize(10);
-                tvPath.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+                tvPath.setTextSize(9.5f);
+                tvPath.setTextColor(Color.parseColor(rec.isSuccess() ? UiTheme.C_TEXT : "#FF7B72"));
                 tvPath.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                tvPath.setSingleLine(true);
+                tvPath.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
                 row.addView(tvPath);
 
                 // 时间
@@ -2608,6 +2776,7 @@ public class MainActivity extends Activity {
                 tvTime.setTextSize(9);
                 tvTime.setTextColor(Color.parseColor(UiTheme.C_DIM));
                 tvTime.setTypeface(Typeface.MONOSPACE);
+                tvTime.setPadding(UiTheme.dp(this, 4), 0, 0, 0);
                 row.addView(tvTime);
 
                 metricsLogList.addView(row);
@@ -2620,16 +2789,109 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 弹窗展示请求完整诊断审计详情 */
+    private void showRequestDetailsDialog(MetricsTracker.RequestRecord rec) {
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 8));
+        root.setPadding(UiTheme.dp(this, 14), UiTheme.dp(this, 12), UiTheme.dp(this, 14), UiTheme.dp(this, 12));
+
+        TextView title = new TextView(this);
+        title.setText("📋 请求访问详情审计");
+        title.setTextSize(12.5f);
+        title.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(title);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(UiTheme.roundRect(this, "#080B0F", UiTheme.C_BORDER, 1, 6));
+        card.setPadding(UiTheme.dp(this, 10), UiTheme.dp(this, 6), UiTheme.dp(this, 10), UiTheme.dp(this, 6));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = UiTheme.dp(this, 8);
+        card.setLayoutParams(clp);
+
+        card.addView(buildDetailRow("请求时间", rec.time));
+        card.addView(buildDetailRow("响应状态", rec.statusCode + " (" + rec.errorHint + ")"));
+        card.addView(buildDetailRow("客户端 IP", rec.clientIp));
+        card.addView(buildDetailRow("HTTP 方法", rec.method));
+        card.addView(buildDetailRow("请求接口", rec.path));
+        card.addView(buildDetailRow("往返延迟", rec.latency));
+        card.addView(buildDetailRow("缓存状态", rec.isCacheHit ? "⚡ 命中智能缓存 (5ms 秒回)" : "全量直通模型"));
+        root.addView(card);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.RIGHT);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = UiTheme.dp(this, 10);
+        btnRow.setLayoutParams(blp);
+
+        TextView copyBtn = UiTheme.createButton(this, "复制诊断", UiTheme.C_CYAN, "#0A2328", UiTheme.C_CYAN, 3);
+        copyBtn.setOnClickListener(v -> {
+            String info = "时间: " + rec.time + "\n状态: " + rec.statusCode + " (" + rec.errorHint + ")\nIP: " + rec.clientIp + "\n接口: " + rec.method + " " + rec.path + "\n延迟: " + rec.latency;
+            copyToClipboard("请求诊断", info);
+            dialog.dismiss();
+        });
+        btnRow.addView(copyBtn);
+
+        TextView closeBtn = UiTheme.createButton(this, "关闭", UiTheme.C_DIM, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
+        LinearLayout.LayoutParams clpBtn = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clpBtn.leftMargin = UiTheme.dp(this, 6);
+        closeBtn.setLayoutParams(clpBtn);
+        closeBtn.setOnClickListener(v -> dialog.dismiss());
+        btnRow.addView(closeBtn);
+
+        root.addView(btnRow);
+
+        dialog.setContentView(root);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            dialog.getWindow().setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.9), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dialog.show();
+    }
+
+    private View buildDetailRow(String k, String v) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, UiTheme.dp(this, 3), 0, UiTheme.dp(this, 3));
+
+        TextView tvK = new TextView(this);
+        tvK.setText(k + "：");
+        tvK.setTextSize(10f);
+        tvK.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvK.setLayoutParams(new LinearLayout.LayoutParams(UiTheme.dp(this, 70), ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(tvK);
+
+        TextView tvV = new TextView(this);
+        tvV.setText(v);
+        tvV.setTextSize(10f);
+        tvV.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvV.setTypeface(Typeface.MONOSPACE);
+        tvV.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tvV);
+
+        return row;
+    }
+
     private void startPeriodicMetricsUpdater() {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
+                lanEndpointIndex = (lanEndpointIndex + 1) % 3;
+                tunnelEndpointIndex = (tunnelEndpointIndex + 1) % 3;
+                updateCyclingEndpointsUI();
+
                 if (currentTab == 3) {
                     refreshMetricsView();
                 }
-                handler.postDelayed(this, 2500);
+                handler.postDelayed(this, 3000);
             }
-        }, 2500);
+        }, 3000);
     }
 
     /** 打开本地已缓存条目明细浏览器 */
