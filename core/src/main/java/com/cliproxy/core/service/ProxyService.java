@@ -380,6 +380,7 @@ public class ProxyService extends Service {
             }, "service-output").start();
 
             int exitCode = proxyProcess.waitFor();
+            MetricsTracker.getInstance().markServerStop();
             if (exitCode == 0 || userInitiatedStop) {
                 writeLog("服务已正常停止 (code=" + exitCode + ")\n");
             } else {
@@ -393,6 +394,9 @@ public class ProxyService extends Service {
         } finally {
             synchronized (startLock) {
                 isStarting = false;
+            }
+            if (proxyProcess == null || !proxyProcess.isAlive()) {
+                MetricsTracker.getInstance().markServerStop();
             }
         }
     }
@@ -482,6 +486,7 @@ public class ProxyService extends Service {
 
     @Override
     public void onDestroy() {
+        MetricsTracker.getInstance().markServerStop();
         MdnsManager.getInstance(this).stop();
         if (smartCacheProxy != null) {
             smartCacheProxy.stop();

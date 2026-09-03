@@ -3,6 +3,7 @@ package com.cliproxy.core.cache;
 import android.content.Context;
 import android.util.Log;
 import com.cliproxy.core.metrics.MetricsTracker;
+import com.cliproxy.core.metrics.TokenEstimator;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -31,6 +32,11 @@ import java.util.regex.Pattern;
  */
 public class SmartCacheProxy {
     private static final String TAG = "SmartCacheProxy";
+
+    // 预编译主流 AI 厂商 Token Usage 匹配模式（OpenAI / Claude / Gemini / DeepSeek 等）
+    private static final Pattern PATTERN_TOTAL_TOKENS = Pattern.compile("\"(?:total_tokens|totalTokenCount)\"\\s*:\\s*(\\d+)");
+    private static final Pattern PATTERN_INPUT_TOKENS = Pattern.compile("\"input_tokens\"\\s*:\\s*(\\d+)");
+    private static final Pattern PATTERN_OUTPUT_TOKENS = Pattern.compile("\"output_tokens\"\\s*:\\s*(\\d+)");
 
     private final Context context;
     private final int publicPort;
@@ -264,7 +270,10 @@ public class SmartCacheProxy {
 
             boolean isChatCompletion = (requestLine != null &&
                     requestLine.startsWith("POST") &&
-                    (requestLine.contains("/chat/completions") || requestLine.contains("/responses")));
+                    (requestLine.contains("/chat/completions") ||
+                     requestLine.contains("/responses") ||
+                     requestLine.contains("/v1/messages") ||
+                     requestLine.contains("generateContent")));
 
             // 开关处于启用状态 且 请求为聊天生成接口
             if (globalCacheEnabled && isChatCompletion && contentLength > 0 && contentLength < 1048576) {
@@ -315,7 +324,7 @@ public class SmartCacheProxy {
                         backendSocket.getOutputStream().write(rawHeaderBytes, 0, headerEndIdx);
                         backendSocket.getOutputStream().write(bodyBytes);
                         backendSocket.getOutputStream().flush();
-                        pipeSockets(clientSocket, backendSocket, activePolicy);
+                        pipeSockets(clientSocket, backendSocket, activePolicy, true);
                         return;
                     }
 
@@ -355,7 +364,7 @@ public class SmartCacheProxy {
                 backendSocket.getOutputStream().write(rawHeaderBytes, 0, headerEndIdx);
                 backendSocket.getOutputStream().write(bodyBytes);
                 backendSocket.getOutputStream().flush();
-                pipeSockets(clientSocket, backendSocket, activePolicy);
+                pipeSockets(clientSocket, backendSocket, activePolicy, isChatCompletion);
                 return;
             }
 
@@ -368,7 +377,7 @@ public class SmartCacheProxy {
                 backendSocket.getOutputStream().flush();
             }
 
-            pipeSockets(clientSocket, backendSocket, activePolicy);
+            pipeSockets(clientSocket, backendSocket, activePolicy, isChatCompletion);
 
         } catch (Exception e) {
             // 客户端断开连接，安全忽略
@@ -457,6 +466,12 @@ public class SmartCacheProxy {
     private void relayAndCaptureResponse(InputStream inBackend, OutputStream outClient,
                                          String cacheKey, String model, JSONArray messages, boolean isStream, GuestPolicy policy) {
         StringBuilder capturedText = new StringBuilder();
+        long capturedOfficialTokens = 0;
+        long capturedIn = 0;
+        long capturedOut = 0;
+        long totalPayloadBytes = 0;
+        boolean settled = false;
+
         try {
             byte[] buffer = new byte[4096];
             int n;
@@ -464,15 +479,31 @@ public class SmartCacheProxy {
             while ((n = inBackend.read(buffer)) != -1) {
                 outClient.write(buffer, 0, n);
                 outClient.flush();
+                totalPayloadBytes += n;
 
                 String chunk = new String(buffer, 0, n, StandardCharsets.UTF_8);
+
+                // 嗅探 official usage
+                Matcher mTotal = PATTERN_TOTAL_TOKENS.matcher(chunk);
+                if (mTotal.find()) {
+                    try { capturedOfficialTokens = Long.parseLong(mTotal.group(1)); } catch (Exception ignored) {}
+                }
+                Matcher mIn = PATTERN_INPUT_TOKENS.matcher(chunk);
+                if (mIn.find()) {
+                    try { capturedIn = Long.parseLong(mIn.group(1)); } catch (Exception ignored) {}
+                }
+                Matcher mOut = PATTERN_OUTPUT_TOKENS.matcher(chunk);
+                if (mOut.find()) {
+                    try { capturedOut = Long.parseLong(mOut.group(1)); } catch (Exception ignored) {}
+                }
+
                 if (isStream) {
                     String[] lines = chunk.split("\n");
                     for (String line : lines) {
                         if (line.contains("[DONE]")) {
                             streamDone = true;
                         }
-                        if (line.startsWith("data:") && line.contains("\"content\":")) {
+                        if (line.startsWith("data:") && (line.contains("\"content\":") || line.contains("\"text\":"))) {
                             try {
                                 String jsonPart = line.substring(5).trim();
                                 if (!jsonPart.equals("[DONE]")) {
@@ -480,8 +511,9 @@ public class SmartCacheProxy {
                                     JSONArray choices = obj.optJSONArray("choices");
                                     if (choices != null && choices.length() > 0) {
                                         JSONObject d = choices.getJSONObject(0).optJSONObject("delta");
-                                        if (d != null && d.has("content")) {
-                                            capturedText.append(d.getString("content"));
+                                        if (d != null) {
+                                            if (d.has("content")) capturedText.append(d.getString("content"));
+                                            else if (d.has("text")) capturedText.append(d.getString("text"));
                                         }
                                     }
                                 }
@@ -500,7 +532,7 @@ public class SmartCacheProxy {
                 }
             }
 
-            if (capturedText.length() > 0) {
+            if (capturedText.length() > 0 || totalPayloadBytes > 0) {
                 String fullContent = capturedText.toString();
                 if (!isStream) {
                     try {
@@ -515,24 +547,29 @@ public class SmartCacheProxy {
                     } catch (Exception ignored) {}
                 }
 
-                String summary = messages.length() > 0 ? messages.getJSONObject(messages.length() - 1).optString("content", "") : "";
+                String summary = messages != null && messages.length() > 0 ? messages.getJSONObject(messages.length() - 1).optString("content", "") : "";
                 if (summary.length() > 60) summary = summary.substring(0, 60) + "...";
-                int tokens = Math.max(1, fullContent.length() / 4);
 
-                ResponseCacheDb.getInstance(context).put(cacheKey, model, summary, fullContent, tokens);
-                MetricsTracker.getInstance().addTokens(tokens);
+                long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut, capturedText, totalPayloadBytes);
+                int tokensInt = (int) Math.min(Integer.MAX_VALUE, Math.max(1, finalTokens));
 
-                if (policy != null && "TOKEN".equals(policy.mode)) {
-                    policy.quotaRemaining = Math.max(0, policy.quotaRemaining - tokens);
-                    if (multiQuotaListener != null) {
-                        multiQuotaListener.onQuotaChanged(policy.key, policy.quotaRemaining, policy.quotaTotal);
-                    }
+                if (fullContent.length() > 0 && cacheKey != null) {
+                    ResponseCacheDb.getInstance(context).put(cacheKey, model, summary, fullContent, tokensInt);
                 }
+                settleTokens(finalTokens, policy);
+                settled = true;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (!settled && totalPayloadBytes > 0) {
+                long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut, capturedText, totalPayloadBytes);
+                settleTokens(finalTokens, policy);
+                settled = true;
+            }
+        }
     }
 
-    private void pipeSockets(Socket s1, Socket s2, GuestPolicy policy) {
+    private void pipeSockets(Socket s1, Socket s2, GuestPolicy policy, boolean isChatCompletion) {
         threadPool.execute(() -> {
             try {
                 InputStream is = s1.getInputStream();
@@ -547,41 +584,156 @@ public class SmartCacheProxy {
             closeQuietly(s2);
         });
 
+        boolean settled = false;
+        long capturedOfficialTokens = 0;
+        long capturedIn = 0;
+        long capturedOut = 0;
+        long totalPayloadBytes = 0;
+        StringBuilder capturedTextForEstimation = new StringBuilder();
+
         try {
             InputStream is = s2.getInputStream();
             OutputStream os = s1.getOutputStream();
             byte[] b = new byte[8192];
             int r;
-            long capturedTokens = 0;
-            long totalBytes = 0;
-            Pattern tokenPattern = Pattern.compile("\"total_tokens\"\\s*:\\s*(\\d+)");
 
             while ((r = is.read(b)) != -1) {
+                // 1. 零延迟即时转发给客户端，打字效果 100% 丝滑
                 os.write(b, 0, r);
                 os.flush();
-                totalBytes += r;
-                if (capturedTokens == 0 && r > 20) {
+
+                if (!isChatCompletion) {
+                    continue;
+                }
+
+                totalPayloadBytes += r;
+
+                if (r > 6) {
                     String chunkStr = new String(b, 0, r, StandardCharsets.UTF_8);
-                    Matcher m = tokenPattern.matcher(chunkStr);
-                    if (m.find()) {
-                        try {
-                            capturedTokens = Long.parseLong(m.group(1));
-                        } catch (Exception ignored) {}
+
+                    // 2. 嗅探官方 Usage 数据
+                    Matcher mTotal = PATTERN_TOTAL_TOKENS.matcher(chunkStr);
+                    if (mTotal.find()) {
+                        try { capturedOfficialTokens = Long.parseLong(mTotal.group(1)); } catch (Exception ignored) {}
+                    }
+                    Matcher mIn = PATTERN_INPUT_TOKENS.matcher(chunkStr);
+                    if (mIn.find()) {
+                        try { capturedIn = Long.parseLong(mIn.group(1)); } catch (Exception ignored) {}
+                    }
+                    Matcher mOut = PATTERN_OUTPUT_TOKENS.matcher(chunkStr);
+                    if (mOut.find()) {
+                        try { capturedOut = Long.parseLong(mOut.group(1)); } catch (Exception ignored) {}
+                    }
+
+                    // 3. 收集增量文本用于未带 usage 时的多语言精准估算
+                    if (capturedOfficialTokens == 0 && (capturedIn == 0 && capturedOut == 0)) {
+                        if (chunkStr.contains("\"content\":") || chunkStr.contains("\"text\":")) {
+                            extractChunkText(chunkStr, capturedTextForEstimation);
+                        }
+                    }
+
+                    // 4. 关键：检测传输结束标志，实现“原地实时结算”，杜绝 Keep-Alive 挂起
+                    boolean isEnd = chunkStr.contains("[DONE]") ||
+                                    chunkStr.contains("\"type\":\"message_stop\"") ||
+                                    chunkStr.contains("\"type\": \"message_stop\"") ||
+                                    chunkStr.contains("0\r\n\r\n");
+
+                    if (!isEnd && capturedOfficialTokens > 0 &&
+                            (chunkStr.endsWith("}\n") || chunkStr.endsWith("}\r\n") || chunkStr.endsWith("}"))) {
+                        isEnd = true;
+                    }
+
+                    if (isEnd && !settled) {
+                        long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut,
+                                capturedTextForEstimation, totalPayloadBytes);
+                        settleTokens(finalTokens, policy);
+                        settled = true;
                     }
                 }
             }
+        } catch (Exception ignored) {
+        } finally {
+            // 5. 异常中断安全兜底：若流式传输被客户端强行掐断（如点停止）且未曾结算，结算已产生的内容
+            if (!settled && isChatCompletion && totalPayloadBytes > 0) {
+                long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut,
+                        capturedTextForEstimation, totalPayloadBytes);
+                settleTokens(finalTokens, policy);
+                settled = true;
+            }
+            closeQuietly(s1);
+        }
+    }
 
-            long finalTokens = (capturedTokens > 0) ? capturedTokens : Math.max(1, totalBytes / 4);
-            MetricsTracker.getInstance().addTokens(finalTokens);
-
-            if (policy != null && "TOKEN".equals(policy.mode)) {
-                policy.quotaRemaining = Math.max(0, policy.quotaRemaining - finalTokens);
-                if (multiQuotaListener != null) {
-                    multiQuotaListener.onQuotaChanged(policy.key, policy.quotaRemaining, policy.quotaTotal);
+    private static void extractChunkText(String chunkStr, StringBuilder sb) {
+        try {
+            String[] lines = chunkStr.split("\n");
+            for (String line : lines) {
+                line = line.trim();
+                if (line.startsWith("data:") && !line.equals("data: [DONE]")) {
+                    String json = line.substring(5).trim();
+                    if (json.startsWith("{") && json.endsWith("}")) {
+                        int contentIdx = json.indexOf("\"content\":\"");
+                        if (contentIdx != -1) {
+                            int start = contentIdx + 11;
+                            int end = findJsonStringEnd(json, start);
+                            if (end > start) {
+                                sb.append(json, start, end);
+                            }
+                        } else {
+                            int textIdx = json.indexOf("\"text\":\"");
+                            if (textIdx != -1) {
+                                int start = textIdx + 8;
+                                int end = findJsonStringEnd(json, start);
+                                if (end > start) {
+                                    sb.append(json, start, end);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } catch (Exception ignored) {}
-        closeQuietly(s1);
+    }
+
+    private static int findJsonStringEnd(String s, int start) {
+        boolean escape = false;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (escape) {
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (c == '"') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static long resolveTokens(long officialTotal, long inTokens, long outTokens,
+                                      StringBuilder capturedText, long totalBytes) {
+        if (officialTotal > 0) {
+            return officialTotal;
+        }
+        if (inTokens > 0 || outTokens > 0) {
+            return inTokens + outTokens;
+        }
+        if (capturedText != null && capturedText.length() > 0) {
+            long textTokens = TokenEstimator.estimateTokens(capturedText.toString());
+            return Math.max(1, textTokens + 30);
+        }
+        return TokenEstimator.estimateFromByteLength(totalBytes);
+    }
+
+    private void settleTokens(long tokens, GuestPolicy policy) {
+        if (tokens <= 0) return;
+        MetricsTracker.getInstance().addTokens(tokens);
+        if (policy != null && "TOKEN".equals(policy.mode)) {
+            policy.quotaRemaining = Math.max(0, policy.quotaRemaining - tokens);
+            if (multiQuotaListener != null) {
+                multiQuotaListener.onQuotaChanged(policy.key, policy.quotaRemaining, policy.quotaTotal);
+            }
+        }
     }
 
     private int findHeaderEnd(byte[] data) {
