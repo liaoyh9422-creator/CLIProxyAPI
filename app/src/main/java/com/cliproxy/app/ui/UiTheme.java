@@ -28,6 +28,7 @@ public class UiTheme {
     public static final String C_PURPLE      = "#BC8CFF";
     public static final String C_RED         = "#DA3633";
     public static final String C_CYAN        = "#39C5CF";
+    public static final String C_YELLOW      = "#D29922";
 
     /** dp 转 px 换算 */
     public static int dp(Context ctx, int s) {

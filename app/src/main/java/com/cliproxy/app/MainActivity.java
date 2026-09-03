@@ -40,6 +40,7 @@ import com.cliproxy.core.cache.ResponseCacheDb;
 import com.cliproxy.core.cache.SmartCacheProxy;
 import com.cliproxy.core.mdns.MdnsManager;
 import com.cliproxy.core.metrics.MetricsTracker;
+import com.cliproxy.core.proxy.ProxyTester;
 import com.cliproxy.core.service.ProxyService;
 
 import java.io.BufferedReader;
@@ -107,12 +108,16 @@ public class MainActivity extends Activity {
 
     // 外网隧道组件
     private TextView tunnelStatusText;
+    private TextView tunnelProxyText;
     private TextView tunnelUrlText;
     private TextView btnTunnelUrlCopy;
     private LinearLayout tunnelLogContainer;
     private ScrollView tunnelLogScroll;
     private final StringBuilder allTunnelLogBuilder = new StringBuilder();
     private int tunnelLogLineIndex = 0;
+
+    // 出站代理组件
+    private TextView proxyBadge;
 
     // Tailscale 组件
     private TextView tsStatusText;
@@ -423,6 +428,15 @@ public class MainActivity extends Activity {
         portBadge.setLayoutParams(plp);
         portBadge.setOnClickListener(v -> showPortEditDialog());
         topRow.addView(portBadge);
+
+        proxyBadge = new TextView(this);
+        updateProxyBadge();
+        LinearLayout.LayoutParams prxlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        prxlp.leftMargin = UiTheme.dp(this, 4);
+        proxyBadge.setLayoutParams(prxlp);
+        proxyBadge.setOnClickListener(v -> showOutboundProxyDialog());
+        topRow.addView(proxyBadge);
+
         card.addView(topRow);
 
         LinearLayout statusRow = new LinearLayout(this);
@@ -640,6 +654,245 @@ public class MainActivity extends Activity {
         row.addView(copyBtn);
 
         return row;
+    }
+
+    private void updateProxyBadge() {
+        if (proxyBadge == null) return;
+        boolean enabled = prefs.getBoolean("outbound_proxy_enabled", false);
+        String url = prefs.getString("outbound_proxy_url", "").trim();
+        proxyBadge.setTextSize(10);
+        proxyBadge.setTypeface(Typeface.MONOSPACE);
+        proxyBadge.setPadding(UiTheme.dp(this, 5), UiTheme.dp(this, 1), UiTheme.dp(this, 5), UiTheme.dp(this, 1));
+        if (enabled && !url.isEmpty()) {
+            proxyBadge.setText(" 🌐 代理: 开 ");
+            proxyBadge.setTextColor(Color.parseColor(UiTheme.C_GREEN));
+            proxyBadge.setBackground(UiTheme.roundRect(this, "#0D2818", UiTheme.C_GREEN, 1, 3));
+        } else {
+            proxyBadge.setText(" 🌐 代理: 关 ");
+            proxyBadge.setTextColor(Color.parseColor(UiTheme.C_DIM));
+            proxyBadge.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 1, 3));
+        }
+    }
+
+    private void updateTunnelProxyText() {
+        if (tunnelProxyText == null) return;
+        boolean enabled = prefs.getBoolean("outbound_proxy_enabled", false);
+        String url = prefs.getString("outbound_proxy_url", "").trim();
+        if (enabled && !url.isEmpty()) {
+            tunnelProxyText.setText("出站代理: " + url);
+            tunnelProxyText.setTextColor(Color.parseColor(UiTheme.C_GREEN));
+        } else {
+            tunnelProxyText.setText("出站代理: 未启用（国内建议开启）");
+            tunnelProxyText.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        }
+    }
+
+    private void showOutboundProxyDialog() {
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(UiTheme.roundRect(this, UiTheme.C_BG, UiTheme.C_BORDER, 1, 8));
+        root.setPadding(UiTheme.dp(this, 16), UiTheme.dp(this, 14), UiTheme.dp(this, 16), UiTheme.dp(this, 14));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("🌐 出站网络代理 (Outbound Proxy)");
+        tvTitle.setTextSize(14);
+        tvTitle.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        TextView tvSub = new TextView(this);
+        tvSub.setText("为 AI 核心网关与 Cloudflare 隧道提供外部代理通信通道");
+        tvSub.setTextSize(10.5f);
+        tvSub.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvSub.setPadding(0, UiTheme.dp(this, 2), 0, UiTheme.dp(this, 8));
+        root.addView(tvSub);
+
+        // 开关行
+        boolean currentEnabled = prefs.getBoolean("outbound_proxy_enabled", false);
+        final boolean[] proxyEnabledHolder = new boolean[]{currentEnabled};
+
+        LinearLayout switchRow = new LinearLayout(this);
+        switchRow.setOrientation(LinearLayout.HORIZONTAL);
+        switchRow.setGravity(Gravity.CENTER_VERTICAL);
+        switchRow.setPadding(0, UiTheme.dp(this, 2), 0, UiTheme.dp(this, 6));
+
+        TextView tvSwitchLabel = new TextView(this);
+        tvSwitchLabel.setText("启用出站代理: ");
+        tvSwitchLabel.setTextSize(12);
+        tvSwitchLabel.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvSwitchLabel.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        switchRow.addView(tvSwitchLabel);
+
+        TextView btnToggle = new TextView(this);
+        btnToggle.setTextSize(11);
+        btnToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        btnToggle.setPadding(UiTheme.dp(this, 10), UiTheme.dp(this, 4), UiTheme.dp(this, 10), UiTheme.dp(this, 4));
+
+        Runnable updateToggleBtn = () -> {
+            boolean en = proxyEnabledHolder[0];
+            btnToggle.setText(en ? "● 已启用" : "○ 已禁用");
+            btnToggle.setTextColor(Color.parseColor(en ? UiTheme.C_GREEN : UiTheme.C_DIM));
+            btnToggle.setBackground(UiTheme.roundRect(this, en ? "#0D2818" : UiTheme.C_SURFACE_ALT,
+                    en ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 4));
+        };
+        updateToggleBtn.run();
+        btnToggle.setOnClickListener(v -> {
+            proxyEnabledHolder[0] = !proxyEnabledHolder[0];
+            updateToggleBtn.run();
+        });
+        switchRow.addView(btnToggle);
+        root.addView(switchRow);
+
+        // 代理地址输入框
+        TextView tvUrlLabel = new TextView(this);
+        tvUrlLabel.setText("代理监听地址 (HTTP / SOCKS5):");
+        tvUrlLabel.setTextSize(11);
+        tvUrlLabel.setTextColor(Color.parseColor(UiTheme.C_BLUE));
+        tvUrlLabel.setPadding(0, UiTheme.dp(this, 4), 0, UiTheme.dp(this, 2));
+        root.addView(tvUrlLabel);
+
+        String currentUrl = prefs.getString("outbound_proxy_url", "http://127.0.0.1:7890");
+        if (currentUrl.isEmpty()) currentUrl = "http://127.0.0.1:7890";
+        EditText inputUrl = new EditText(this);
+        inputUrl.setText(currentUrl);
+        inputUrl.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        inputUrl.setTextSize(12.5f);
+        inputUrl.setTypeface(Typeface.MONOSPACE);
+        inputUrl.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 4));
+        inputUrl.setPadding(UiTheme.dp(this, 10), UiTheme.dp(this, 6), UiTheme.dp(this, 10), UiTheme.dp(this, 6));
+        root.addView(inputUrl);
+
+        // 快捷常用地址行
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        presetRow.setPadding(0, UiTheme.dp(this, 4), 0, UiTheme.dp(this, 6));
+
+        String[][] presets = new String[][]{
+                {"7890 (Clash)", "http://127.0.0.1:7890"},
+                {"10809 (v2ray)", "http://127.0.0.1:10809"},
+                {"10808 (SOCKS)", "socks5://127.0.0.1:10808"}
+        };
+        for (String[] preset : presets) {
+            TextView pBtn = UiTheme.createButton(this, preset[0], UiTheme.C_CYAN, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            plp.rightMargin = UiTheme.dp(this, 4);
+            pBtn.setLayoutParams(plp);
+            pBtn.setTextSize(10);
+            pBtn.setOnClickListener(v -> inputUrl.setText(preset[1]));
+            presetRow.addView(pBtn);
+        }
+        root.addView(presetRow);
+
+        // 连通性测试区
+        LinearLayout testRow = new LinearLayout(this);
+        testRow.setOrientation(LinearLayout.HORIZONTAL);
+        testRow.setGravity(Gravity.CENTER_VERTICAL);
+        testRow.setPadding(0, UiTheme.dp(this, 2), 0, UiTheme.dp(this, 4));
+
+        TextView btnTest = UiTheme.createButton(this, "⚡ 测试连通性", UiTheme.C_YELLOW, "#2B240B", UiTheme.C_YELLOW, 3);
+        testRow.addView(btnTest);
+
+        TextView tvTestStatus = new TextView(this);
+        tvTestStatus.setText(" ● 未测试");
+        tvTestStatus.setTextSize(10.5f);
+        tvTestStatus.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvTestStatus.setTypeface(Typeface.MONOSPACE);
+        LinearLayout.LayoutParams tslp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tslp.leftMargin = UiTheme.dp(this, 6);
+        tvTestStatus.setLayoutParams(tslp);
+        testRow.addView(tvTestStatus);
+        root.addView(testRow);
+
+        btnTest.setOnClickListener(v -> {
+            String testTarget = inputUrl.getText().toString().trim();
+            if (testTarget.isEmpty()) {
+                tvTestStatus.setText(" ● 请先输入代理地址");
+                tvTestStatus.setTextColor(Color.parseColor(UiTheme.C_RED));
+                return;
+            }
+            tvTestStatus.setText(" ● 正在连接探测...");
+            tvTestStatus.setTextColor(Color.parseColor(UiTheme.C_CYAN));
+            btnTest.setEnabled(false);
+
+            ProxyTester.testProxy(testTarget, (success, cfLatency, aiLatency, msg) -> {
+                btnTest.setEnabled(true);
+                tvTestStatus.setText(msg);
+                tvTestStatus.setTextColor(Color.parseColor(success ? UiTheme.C_GREEN : UiTheme.C_RED));
+            });
+        });
+
+        // 绕过规则 (NO_PROXY)
+        TextView tvBypassLabel = new TextView(this);
+        tvBypassLabel.setText("直连绕过名单 (NO_PROXY):");
+        tvBypassLabel.setTextSize(11);
+        tvBypassLabel.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvBypassLabel.setPadding(0, UiTheme.dp(this, 6), 0, UiTheme.dp(this, 2));
+        root.addView(tvBypassLabel);
+
+        String currentBypass = prefs.getString("outbound_proxy_bypass",
+                "localhost,127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.cn,*.gitee.com,gitee.com");
+        EditText inputBypass = new EditText(this);
+        inputBypass.setText(currentBypass);
+        inputBypass.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        inputBypass.setTextSize(11);
+        inputBypass.setTypeface(Typeface.MONOSPACE);
+        inputBypass.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 4));
+        inputBypass.setPadding(UiTheme.dp(this, 8), UiTheme.dp(this, 6), UiTheme.dp(this, 8), UiTheme.dp(this, 6));
+        inputBypass.setMinLines(2);
+        inputBypass.setMaxLines(3);
+        root.addView(inputBypass);
+
+        // 按钮栏
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams arlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        arlp.topMargin = UiTheme.dp(this, 12);
+        actionRow.setLayoutParams(arlp);
+
+        TextView btnCancel = UiTheme.createButton(this, "取消", UiTheme.C_DIM, UiTheme.C_SURFACE_ALT, UiTheme.C_BORDER, 3);
+        btnCancel.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+        actionRow.addView(btnCancel);
+
+        View spacer = new View(this);
+        actionRow.addView(spacer, new LinearLayout.LayoutParams(UiTheme.dp(this, 8), 1));
+
+        TextView btnSave = UiTheme.createButton(this, "保存配置", UiTheme.C_CYAN, "#0A2328", UiTheme.C_CYAN, 3);
+        btnSave.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnSave.setOnClickListener(v -> {
+            boolean en = proxyEnabledHolder[0];
+            String u = inputUrl.getText().toString().trim();
+            String bp = inputBypass.getText().toString().trim();
+
+            prefs.edit()
+                    .putBoolean("outbound_proxy_enabled", en)
+                    .putString("outbound_proxy_url", u)
+                    .putString("outbound_proxy_bypass", bp)
+                    .apply();
+
+            updateProxyBadge();
+            updateTunnelProxyText();
+            dialog.dismiss();
+
+            String statusDesc = en ? ("已开启 (" + u + ")") : "已关闭";
+            if (isServerRunning) {
+                Toast.makeText(this, "代理" + statusDesc + "，将在重启服务或下次穿透时生效", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this, "出站代理设置已保存: " + statusDesc, Toast.LENGTH_SHORT).show();
+            }
+        });
+        actionRow.addView(btnSave);
+        root.addView(actionRow);
+
+        dialog.setContentView(root);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setLayout(UiTheme.dp(this, 320), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dialog.show();
     }
 
     private void showPortEditDialog() {
@@ -1054,6 +1307,22 @@ public class MainActivity extends Activity {
         tunnelStatusText.setTextColor(Color.parseColor(UiTheme.C_DIM));
         statusRow.addView(tunnelStatusText);
         card.addView(statusRow);
+
+        LinearLayout proxyRow = new LinearLayout(this);
+        proxyRow.setOrientation(LinearLayout.HORIZONTAL);
+        proxyRow.setGravity(Gravity.CENTER_VERTICAL);
+        proxyRow.setPadding(0, UiTheme.dp(this, 2), 0, UiTheme.dp(this, 3));
+
+        tunnelProxyText = new TextView(this);
+        updateTunnelProxyText();
+        tunnelProxyText.setTextSize(10.5f);
+        tunnelProxyText.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        proxyRow.addView(tunnelProxyText);
+
+        TextView cfgProxyBtn = UiTheme.createButton(this, "出站代理设置 ⚙", UiTheme.C_CYAN, "#0A2328", UiTheme.C_CYAN, 3);
+        cfgProxyBtn.setOnClickListener(v -> showOutboundProxyDialog());
+        proxyRow.addView(cfgProxyBtn);
+        card.addView(proxyRow);
 
         tunnelEndpointsContainer = new LinearLayout(this);
         tunnelEndpointsContainer.setOrientation(LinearLayout.VERTICAL);

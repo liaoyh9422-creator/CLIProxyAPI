@@ -55,6 +55,11 @@
 * 随时一键切入内置可视化 Web 控制台（`/management.html`），在线完成 OAuth 授权与配置热重载。
 * 所有配置文件与凭据统一保存在 `/sdcard/Download/CLIProxyAPI/`，应用卸载升级数据永不丢失。
 
+### 7. 🌐 全局出站网络代理与即时诊断 (Outbound Proxy)
+* **全协议覆盖**：原生支持 `HTTP`、`HTTPS` 与 `SOCKS5` 代理（兼容 Clash `127.0.0.1:7890`、v2rayNG `127.0.0.1:10809` 等）。
+* **沙箱环境自动透传**：无须系统开启全局 VPN，代理参数自动注入 PRoot 容器环境变量（`HTTP_PROXY` / `ALL_PROXY`），驱动核心网关与 Cloudflare 穿透隧道极速建立境外通信。
+* **智能分流与一键连通性测试**：内置局域网/国内直连白名单 (`NO_PROXY`)；支持一键测速并即时反馈 Cloudflare 与 OpenAI 节点往返延迟。
+
 ---
 
 ## 🏗️ 系统架构设计

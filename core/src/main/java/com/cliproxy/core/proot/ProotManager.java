@@ -202,10 +202,12 @@ public class ProotManager {
 
         try {
             PrintWriter pw = new PrintWriter(new File(rootfs, "etc/resolv.conf"));
+            pw.println("nameserver 223.5.5.5");
+            pw.println("nameserver 119.29.29.29");
+            pw.println("nameserver 114.114.114.114");
             pw.println("nameserver 8.8.8.8");
-            pw.println("nameserver 8.8.4.4");
             pw.println("nameserver 1.1.1.1");
-            pw.println("options timeout:5 attempts:3");
+            pw.println("options timeout:2 attempts:2");
             pw.close();
 
             PrintWriter ns = new PrintWriter(new File(rootfs, "etc/nsswitch.conf"));
@@ -325,6 +327,35 @@ public class ProotManager {
         pb.environment().put("GODEBUG", "netdns=go");
         pb.environment().put("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt");
         pb.environment().put("SSL_CERT_DIR", "/etc/ssl/certs");
+
+        // 注入出站网络代理 (支持 HTTP/HTTPS 与 SOCKS5)
+        try {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("cliproxy_prefs", android.content.Context.MODE_PRIVATE);
+            boolean proxyEnabled = prefs.getBoolean("outbound_proxy_enabled", false);
+            String proxyUrl = prefs.getString("outbound_proxy_url", "").trim();
+            String bypassRules = prefs.getString("outbound_proxy_bypass", "localhost,127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.cn,*.gitee.com,gitee.com").trim();
+
+            if (proxyEnabled && !proxyUrl.isEmpty()) {
+                if (!proxyUrl.contains("://")) {
+                    proxyUrl = "http://" + proxyUrl;
+                }
+                if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks5h://")) {
+                    pb.environment().put("ALL_PROXY", proxyUrl);
+                    pb.environment().put("all_proxy", proxyUrl);
+                }
+                pb.environment().put("HTTP_PROXY", proxyUrl);
+                pb.environment().put("HTTPS_PROXY", proxyUrl);
+                pb.environment().put("http_proxy", proxyUrl);
+                pb.environment().put("https_proxy", proxyUrl);
+
+                if (!bypassRules.isEmpty()) {
+                    pb.environment().put("NO_PROXY", bypassRules);
+                    pb.environment().put("no_proxy", bypassRules);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to inject proxy env: " + e.getMessage());
+        }
     }
 
     public String getRootfsPath() { return rootfsPath; }

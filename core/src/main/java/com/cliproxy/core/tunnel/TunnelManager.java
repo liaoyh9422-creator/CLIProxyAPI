@@ -80,6 +80,13 @@ public class TunnelManager {
                 writeTunnelLog("▶ 转发目标: http://localhost:" + port + "\n");
             }
 
+            android.content.SharedPreferences prefs = context.getSharedPreferences("cliproxy_prefs", android.content.Context.MODE_PRIVATE);
+            boolean proxyEnabled = prefs.getBoolean("outbound_proxy_enabled", false);
+            String proxyUrl = prefs.getString("outbound_proxy_url", "").trim();
+            if (proxyEnabled && !proxyUrl.isEmpty()) {
+                writeTunnelLog("▶ 出站代理: " + proxyUrl + "\n");
+            }
+
             if (cmdParts.isEmpty()) {
                 writeTunnelLog("❌ 无有效命令\n");
                 return;
