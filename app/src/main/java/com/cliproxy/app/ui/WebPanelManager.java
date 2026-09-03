@@ -1,6 +1,7 @@
 package com.cliproxy.app.ui;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -8,6 +9,7 @@ import android.net.Uri;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
@@ -19,9 +21,11 @@ import android.widget.Toast;
 
 /**
  * WebPanelManager: 内嵌管理面板控制器
- * 负责渲染全屏沉浸式 WebView、顶部精简工具栏以及处理网页导航事件
+ * 负责渲染全屏沉浸式 WebView、顶部精简工具栏以及处理网页导航事件与文件上传
  */
 public class WebPanelManager {
+
+    public static final int FILE_CHOOSER_REQUEST_CODE = 10001;
 
     public interface CloseCallback {
         void onClose();
@@ -30,6 +34,7 @@ public class WebPanelManager {
     private final Activity activity;
     private final CloseCallback closeCallback;
     private WebView activeWebView;
+    private ValueCallback<Uri[]> uploadMessageCallback;
 
     public WebPanelManager(Activity activity, CloseCallback closeCallback) {
         this.activity = activity;
@@ -103,6 +108,8 @@ public class WebPanelManager {
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setBuiltInZoomControls(true);
         webView.getSettings().setDisplayZoomControls(false);
+        webView.getSettings().setAllowFileAccess(true);
+        webView.getSettings().setAllowContentAccess(true);
         webView.setBackgroundColor(Color.parseColor(UiTheme.C_BG));
         LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -118,6 +125,39 @@ public class WebPanelManager {
                     pb.setProgress(newProgress);
                 } else {
                     pb.setVisibility(View.GONE);
+                }
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (uploadMessageCallback != null) {
+                    uploadMessageCallback.onReceiveValue(null);
+                    uploadMessageCallback = null;
+                }
+                uploadMessageCallback = filePathCallback;
+
+                Intent intent = null;
+                if (fileChooserParams != null) {
+                    try {
+                        intent = fileChooserParams.createIntent();
+                    } catch (Exception ignored) {}
+                }
+                if (intent == null) {
+                    intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                }
+
+                try {
+                    activity.startActivityForResult(Intent.createChooser(intent, "选择要上传的文件"), FILE_CHOOSER_REQUEST_CODE);
+                    return true;
+                } catch (Exception e) {
+                    if (uploadMessageCallback != null) {
+                        uploadMessageCallback.onReceiveValue(null);
+                        uploadMessageCallback = null;
+                    }
+                    Toast.makeText(activity, "无法拉起文件选择器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    return false;
                 }
             }
         });
@@ -143,6 +183,28 @@ public class WebPanelManager {
         return layout;
     }
 
+    /** 处理文件选择器返回结果 */
+    public void handleFileChooserResult(int resultCode, Intent data) {
+        if (uploadMessageCallback == null) return;
+        Uri[] results = null;
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            String dataString = data.getDataString();
+            ClipData clipData = data.getClipData();
+            if (clipData != null) {
+                results = new Uri[clipData.getItemCount()];
+                for (int i = 0; i < clipData.getItemCount(); i++) {
+                    results[i] = clipData.getItemAt(i).getUri();
+                }
+            } else if (dataString != null) {
+                results = new Uri[]{Uri.parse(dataString)};
+            } else if (data.getData() != null) {
+                results = new Uri[]{data.getData()};
+            }
+        }
+        uploadMessageCallback.onReceiveValue(results);
+        uploadMessageCallback = null;
+    }
+
     /** 响应系统物理返回键 */
     public boolean handleBackPressed() {
         if (activeWebView != null) {
@@ -158,6 +220,10 @@ public class WebPanelManager {
 
     /** 关闭内嵌面板并释放资源 */
     public void close() {
+        if (uploadMessageCallback != null) {
+            uploadMessageCallback.onReceiveValue(null);
+            uploadMessageCallback = null;
+        }
         if (activeWebView != null) {
             activeWebView.destroy();
             activeWebView = null;
