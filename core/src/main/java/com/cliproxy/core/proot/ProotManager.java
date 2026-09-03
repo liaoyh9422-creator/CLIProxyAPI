@@ -47,8 +47,30 @@ public class ProotManager {
         linkerPath = getNativeLib("libldlinux.so");
         cliproxyPath = getNativeLib("libcliproxy.so");
 
+        if (cliproxyPath == null) {
+            File f1 = new File(context.getFilesDir(), "libcliproxy.so");
+            if (f1.exists() && f1.length() > 5_000_000) {
+                f1.setExecutable(true, false);
+                cliproxyPath = f1.getAbsolutePath();
+            } else {
+                File f2 = new File(context.getFilesDir(), "cliproxy");
+                if (f2.exists() && f2.length() > 5_000_000) {
+                    f2.setExecutable(true, false);
+                    cliproxyPath = f2.getAbsolutePath();
+                }
+            }
+        }
+
         Log.d(TAG, "PRoot 核心组件探测: proot=" + prootPath + ", linker=" + linkerPath + ", cliproxy=" + cliproxyPath);
         return prootPath != null && loaderPath != null && linkerPath != null && cliproxyPath != null;
+    }
+
+    public boolean isCliproxyReady() {
+        if (getNativeLib("libcliproxy.so") != null) return true;
+        File f1 = new File(context.getFilesDir(), "libcliproxy.so");
+        if (f1.exists() && f1.length() > 5_000_000) return true;
+        File f2 = new File(context.getFilesDir(), "cliproxy");
+        return f2.exists() && f2.length() > 5_000_000;
     }
 
     /** 检索应用的 nativeLibraryDir 或替代目录中的 .so 原生文件 */

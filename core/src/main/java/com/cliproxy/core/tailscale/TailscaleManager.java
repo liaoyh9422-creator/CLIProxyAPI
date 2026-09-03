@@ -60,20 +60,42 @@ public class TailscaleManager {
         return magicDns;
     }
 
+    public boolean isTailscaleReady() {
+        if (tailscaledBin.exists() && tailscaledBin.length() > 3_000_000 &&
+            tailscaleBin.exists() && tailscaleBin.length() > 3_000_000) {
+            return true;
+        }
+        try (InputStream is = context.getAssets().open("tailscale-bin.tar.bin")) {
+            return is != null;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     /** 确保 tailscale 与 tailscaled 静态可执行文件就绪 */
     public synchronized boolean ensureBinaries() {
-        if (tailscaledBin.exists() && tailscaledBin.length() > 5_000_000 &&
-            tailscaleBin.exists() && tailscaleBin.length() > 5_000_000) {
-            tailscaledBin.setExecutable(true);
-            tailscaleBin.setExecutable(true);
+        if (tailscaledBin.exists() && tailscaledBin.length() > 3_000_000 &&
+            tailscaleBin.exists() && tailscaleBin.length() > 3_000_000) {
+            tailscaledBin.setExecutable(true, false);
+            tailscaleBin.setExecutable(true, false);
             return true;
+        }
+
+        boolean hasAsset = false;
+        try (InputStream is = context.getAssets().open("tailscale-bin.tar.bin")) {
+            hasAsset = (is != null);
+        } catch (Exception ignored) {}
+
+        if (!hasAsset) {
+            writeLog("❌ 未检测到内置 Tailscale 组件，请先下载该组件后再连接\n");
+            return false;
         }
 
         try {
             writeLog("📦 从内置资源释放 Tailscale 组件 (约 18MB)...\n");
             AssetExtractor.extractAssetTar(context, "tailscale-bin.tar.bin", filesDir);
-            tailscaledBin.setExecutable(true);
-            tailscaleBin.setExecutable(true);
+            tailscaledBin.setExecutable(true, false);
+            tailscaleBin.setExecutable(true, false);
             writeLog("✅ Tailscale 组件释放完成\n");
             return true;
         } catch (Exception e) {

@@ -9,6 +9,24 @@ android {
         versionCode 2
         versionName "1.1.0"
     }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    flavorDimensions "edition"
+    productFlavors {
+        full {
+            dimension "edition"
+            buildConfigField "boolean", "IS_LITE", "false"
+            versionNameSuffix "-full"
+        }
+        lite {
+            dimension "edition"
+            buildConfigField "boolean", "IS_LITE", "true"
+            versionNameSuffix "-lite"
+        }
+    }
     signingConfigs {
         release {
             storeFile file('cliproxy.keystore')

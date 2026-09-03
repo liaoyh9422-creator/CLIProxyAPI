@@ -27,6 +27,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -34,6 +35,7 @@ import android.widget.Toast;
 import com.cliproxy.app.config.AppConfig;
 import com.cliproxy.app.ui.UiTheme;
 import com.cliproxy.app.ui.WebPanelManager;
+import com.cliproxy.core.download.BinaryDownloadManager;
 import com.cliproxy.core.cache.ResponseCacheDb;
 import com.cliproxy.core.cache.SmartCacheProxy;
 import com.cliproxy.core.mdns.MdnsManager;
@@ -2525,7 +2527,119 @@ public class MainActivity extends Activity {
 
     // ==================== 8. 服务控制 (CLIProxy, Tunnel, Tailscale) ====================
 
+    private void showBinaryDownloadDialog(String compName, String compKey, Runnable onSuccessAction) {
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setCancelable(false);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 10));
+        layout.setPadding(UiTheme.dp(this, 18), UiTheme.dp(this, 18), UiTheme.dp(this, 18), UiTheme.dp(this, 18));
+
+        // 标题
+        TextView title = new TextView(this);
+        title.setText("📦 组件按需下载 · " + compName);
+        title.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        title.setTextSize(15f);
+        title.setTypeface(title.getTypeface(), Typeface.BOLD);
+        title.setPadding(0, 0, 0, UiTheme.dp(this, 8));
+        layout.addView(title);
+
+        // 提示信息
+        TextView subtitle = new TextView(this);
+        subtitle.setText("当前为 Lite 极速轻量安装包，底层核心二进制将从国内 Gitee 镜像高速下载并自动配置。");
+        subtitle.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        subtitle.setTextSize(12f);
+        subtitle.setPadding(0, 0, 0, UiTheme.dp(this, 14));
+        layout.addView(subtitle);
+
+        // 进度条
+        ProgressBar progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setMax(100);
+        progressBar.setProgress(0);
+        progressBar.setIndeterminate(false);
+        layout.addView(progressBar);
+
+        // 进度详情
+        TextView tvProgress = new TextView(this);
+        tvProgress.setText("准备连接下载节点...");
+        tvProgress.setTextColor(Color.parseColor(UiTheme.C_BLUE));
+        tvProgress.setTextSize(11f);
+        tvProgress.setPadding(0, UiTheme.dp(this, 8), 0, UiTheme.dp(this, 4));
+        layout.addView(tvProgress);
+
+        // 状态信息
+        TextView tvStatus = new TextView(this);
+        tvStatus.setText("正在连接 Gitee 节点...");
+        tvStatus.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvStatus.setTextSize(10f);
+        tvStatus.setPadding(0, 0, 0, UiTheme.dp(this, 12));
+        layout.addView(tvStatus);
+
+        // 底部按钮栏
+        LinearLayout btnBar = new LinearLayout(this);
+        btnBar.setOrientation(LinearLayout.HORIZONTAL);
+        btnBar.setGravity(Gravity.RIGHT);
+
+        TextView btnCancel = UiTheme.createButton(this, "取消", UiTheme.C_DIM, "#252B33", UiTheme.C_BORDER, 5);
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+        btnBar.addView(btnCancel);
+        layout.addView(btnBar);
+
+        dialog.setContentView(layout);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.88f), WindowManager.LayoutParams.WRAP_CONTENT);
+            w.setBackgroundDrawableResource(android.R.color.transparent);
+        }
+        dialog.show();
+
+        BinaryDownloadManager.downloadComponent(this, compKey, new BinaryDownloadManager.DownloadListener() {
+            @Override
+            public void onProgress(long bytesRead, long totalBytes, int percent, double speedMBs) {
+                handler.post(() -> {
+                    progressBar.setProgress(percent);
+                    String readStr = String.format(Locale.getDefault(), "%.1f", bytesRead / 1024.0 / 1024.0);
+                    String totalStr = totalBytes > 0 ? String.format(Locale.getDefault(), "%.1f", totalBytes / 1024.0 / 1024.0) : "未知";
+                    String speedStr = String.format(Locale.getDefault(), "%.1f", speedMBs);
+                    tvProgress.setText("已下载: " + readStr + " MB / " + totalStr + " MB (" + percent + "%) · " + speedStr + " MB/s");
+                });
+            }
+
+            @Override
+            public void onStatus(String statusText) {
+                handler.post(() -> tvStatus.setText(statusText));
+            }
+
+            @Override
+            public void onSuccess(File targetDir) {
+                handler.post(() -> {
+                    Toast.makeText(MainActivity.this, "✅ " + compName + " 下载并就绪！", Toast.LENGTH_SHORT).show();
+                    dialog.dismiss();
+                    if (onSuccessAction != null) {
+                        onSuccessAction.run();
+                    }
+                });
+            }
+
+            @Override
+            public void onFailure(String errorMessage) {
+                handler.post(() -> {
+                    tvStatus.setText("❌ 下载失败: " + errorMessage);
+                    tvStatus.setTextColor(Color.parseColor(UiTheme.C_RED));
+                    btnCancel.setText("关闭");
+                    Toast.makeText(MainActivity.this, "下载失败: " + errorMessage, Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
     private void startServer() {
+        if (!BinaryDownloadManager.isCliproxyReady(this)) {
+            showBinaryDownloadDialog("CLIProxy 核心代理", BinaryDownloadManager.KEY_CLIPROXY, this::startServer);
+            return;
+        }
         ProxyService.start(this);
         prefs.edit().putBoolean("running", true).apply();
         updateUI(true);
@@ -2562,6 +2676,10 @@ public class MainActivity extends Activity {
     }
 
     private void startTunnel() {
+        if (!BinaryDownloadManager.isCloudflaredReady(this)) {
+            showBinaryDownloadDialog("Cloudflare 穿透组件", BinaryDownloadManager.KEY_CLOUDFLARED, this::startTunnel);
+            return;
+        }
         Intent intent = new Intent(this, ProxyService.class);
         intent.setAction(ProxyService.ACTION_START_TUNNEL);
         intent.putExtra(ProxyService.EXTRA_TUNNEL_MODE, "cloudflare");
@@ -2581,6 +2699,10 @@ public class MainActivity extends Activity {
     }
 
     private void startTailscale() {
+        if (!BinaryDownloadManager.isTailscaleReady(this)) {
+            showBinaryDownloadDialog("Tailscale 组网组件", BinaryDownloadManager.KEY_TAILSCALE, this::startTailscale);
+            return;
+        }
         String authKey = editTsAuthKey.getText().toString().trim();
         String hostname = editTsHostname.getText().toString().trim();
         prefs.edit().putString("ts_auth_key", authKey)

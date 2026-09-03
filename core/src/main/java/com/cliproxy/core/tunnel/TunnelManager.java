@@ -120,15 +120,34 @@ public class TunnelManager {
         }
     }
 
+    public boolean isCloudflaredReady() {
+        File cf = new File(context.getFilesDir(), "cloudflared");
+        if (cf.exists() && cf.length() > 1_000_000) return true;
+        try (InputStream is = context.getAssets().open("cloudflared.bin")) {
+            return is != null;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     /** 确保 cloudflared 可执行二进制文件就绪 */
     private void ensureCloudflaredBinary(File filesDir, StatusListener listener) throws IOException {
         File cf = new File(filesDir, "cloudflared");
         if (!cf.exists() || cf.length() < 1_000_000) {
-            writeTunnelLog("📦 从内置 assets 释放 cloudflared...\n");
-            if (listener != null) listener.onStatus("释放 cloudflared...");
-            AssetExtractor.extractAsset(context, "cloudflared.bin", cf);
-            cf.setExecutable(true);
-            writeTunnelLog("✅ cloudflared 释放完成 (" + (cf.length() / 1024 / 1024) + "MB)\n");
+            boolean hasAsset = false;
+            try (InputStream is = context.getAssets().open("cloudflared.bin")) {
+                hasAsset = (is != null);
+            } catch (Exception ignored) {}
+
+            if (hasAsset) {
+                writeTunnelLog("📦 从内置 assets 释放 cloudflared...\n");
+                if (listener != null) listener.onStatus("释放 cloudflared...");
+                AssetExtractor.extractAsset(context, "cloudflared.bin", cf);
+                cf.setExecutable(true, false);
+                writeTunnelLog("✅ cloudflared 释放完成 (" + (cf.length() / 1024 / 1024) + "MB)\n");
+            } else {
+                throw new IOException("未检测到 cloudflared 组件，请先下载该组件后再启动隧道");
+            }
         }
     }
 
