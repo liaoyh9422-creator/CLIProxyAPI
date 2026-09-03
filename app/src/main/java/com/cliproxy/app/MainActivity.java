@@ -451,7 +451,7 @@ public class MainActivity extends Activity {
         topRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView tagBadge = new TextView(this);
-        tagBadge.setText("AI Proxy");
+        tagBadge.setText("AI Proxy_Lite");
         tagBadge.setTextSize(9.5f);
         tagBadge.setTextColor(Color.parseColor(UiTheme.C_PURPLE));
         tagBadge.setBackground(UiTheme.roundRect(this, "#1A102F", UiTheme.C_PURPLE, 1, 3));
@@ -459,7 +459,7 @@ public class MainActivity extends Activity {
         topRow.addView(tagBadge);
 
         portBadge = new TextView(this);
-        portBadge.setText(" :" + appConfig.getPort() + " ✎");
+        portBadge.setText(":" + appConfig.getPort() + " ✎");
         portBadge.setTextSize(10);
         portBadge.setTextColor(Color.parseColor(UiTheme.C_CYAN));
         portBadge.setTypeface(Typeface.MONOSPACE);
@@ -594,12 +594,12 @@ public class MainActivity extends Activity {
             addressCardContainer.addView(divExt, dlpe);
         }
 
-        String lanPrefix = isMdnsOn ?
+        String localPrefix = isMdnsOn ?
                 ("http://" + MdnsManager.HOST_NAME + ":" + appConfig.getPort()) :
-                ("http://" + getLanIpAddress() + ":" + appConfig.getPort());
+                ("http://127.0.0.1:" + appConfig.getPort());
         addressCardContainer.addView(buildCyclingEndpointRow(
-                isMdnsOn ? "局域网请求端点 (mDNS)" : "局域网请求端点",
-                lanPrefix, false));
+                isMdnsOn ? "局域网请求端点 (mDNS)" : "本地请求端点",
+                localPrefix, false));
 
         View div1 = new View(this);
         div1.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
@@ -612,7 +612,7 @@ public class MainActivity extends Activity {
         addressCardContainer.addView(buildApiKeyRow());
     }
 
-    /** 构建支持自动轮播变换的请求端点行组件 */
+    /** 构建支持自动轮播变换的请求端点行组件（极简纯净模式） */
     private View buildCyclingEndpointRow(String title, String hostPrefix, boolean isTunnel) {
         if (!isTunnel) {
             currentLanPrefix = hostPrefix;
@@ -620,65 +620,27 @@ public class MainActivity extends Activity {
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, UiTheme.dp(this, 4), 0, UiTheme.dp(this, 4));
+        row.setPadding(0, UiTheme.dp(this, 5), 0, UiTheme.dp(this, 5));
 
-        // 顶层标题与自动轮换微型胶囊
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-
+        // 顶层标题
         TextView label = new TextView(this);
         label.setText("● " + title);
         label.setTextSize(10.5f);
         label.setTextColor(Color.parseColor(UiTheme.C_BLUE));
         label.setTypeface(Typeface.DEFAULT_BOLD);
-        top.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        LinearLayout pillsContainer = new LinearLayout(this);
-        pillsContainer.setOrientation(LinearLayout.HORIZONTAL);
-
-        TextView[] pills = isTunnel ? tunnelEndpointPills : lanEndpointPills;
-        int activeIdx = isTunnel ? tunnelEndpointIndex : lanEndpointIndex;
-
-        for (int i = 0; i < 3; i++) {
-            final int pillIdx = i;
-            boolean active = (i == activeIdx);
-            TextView pill = UiTheme.createButton(this, ENDPOINT_LABELS[i],
-                    active ? UiTheme.C_GREEN : UiTheme.C_DIM,
-                    active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
-                    active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 3);
-            pill.setTextSize(9f);
-            pill.setPadding(UiTheme.dp(this, 6), UiTheme.dp(this, 2), UiTheme.dp(this, 6), UiTheme.dp(this, 2));
-
-            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (i > 0) plp.leftMargin = UiTheme.dp(this, 4);
-            pill.setLayoutParams(plp);
-
-            pill.setOnClickListener(v -> {
-                if (isTunnel) {
-                    tunnelEndpointIndex = pillIdx;
-                } else {
-                    lanEndpointIndex = pillIdx;
-                }
-                updateCyclingEndpointsUI();
-            });
-
-            pills[i] = pill;
-            pillsContainer.addView(pill);
-        }
-        top.addView(pillsContainer);
-        row.addView(top);
+        row.addView(label);
 
         // 底层端点地址展示与复制按钮
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.HORIZONTAL);
         bottom.setGravity(Gravity.CENTER_VERTICAL);
-        bottom.setPadding(0, UiTheme.dp(this, 3), 0, 0);
+        bottom.setPadding(0, UiTheme.dp(this, 2), 0, 0);
 
         TextView tvUrl = new TextView(this);
         tvUrl.setTextSize(10.5f);
         tvUrl.setTextColor(Color.parseColor(UiTheme.C_TEXT));
         tvUrl.setTypeface(Typeface.MONOSPACE);
+        int activeIdx = isTunnel ? tunnelEndpointIndex : lanEndpointIndex;
         tvUrl.setText(hostPrefix + ENDPOINT_SUFFIXES[activeIdx]);
         tvUrl.setSingleLine(true);
         tvUrl.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
@@ -704,27 +666,9 @@ public class MainActivity extends Activity {
     private void updateCyclingEndpointsUI() {
         if (lanEndpointUrlView != null && !currentLanPrefix.isEmpty()) {
             lanEndpointUrlView.setText(currentLanPrefix + ENDPOINT_SUFFIXES[lanEndpointIndex]);
-            for (int i = 0; i < 3; i++) {
-                if (lanEndpointPills[i] != null) {
-                    boolean active = (i == lanEndpointIndex);
-                    lanEndpointPills[i].setTextColor(Color.parseColor(active ? UiTheme.C_GREEN : UiTheme.C_DIM));
-                    lanEndpointPills[i].setBackground(UiTheme.roundRect(this,
-                            active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
-                            active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
-                }
-            }
         }
         if (tunnelEndpointUrlView != null && !currentTunnelDomain.isEmpty()) {
             tunnelEndpointUrlView.setText(currentTunnelDomain + ENDPOINT_SUFFIXES[tunnelEndpointIndex]);
-            for (int i = 0; i < 3; i++) {
-                if (tunnelEndpointPills[i] != null) {
-                    boolean active = (i == tunnelEndpointIndex);
-                    tunnelEndpointPills[i].setTextColor(Color.parseColor(active ? UiTheme.C_GREEN : UiTheme.C_DIM));
-                    tunnelEndpointPills[i].setBackground(UiTheme.roundRect(this,
-                            active ? "#0D2818" : UiTheme.C_SURFACE_ALT,
-                            active ? UiTheme.C_GREEN : UiTheme.C_BORDER, 1, 3));
-                }
-            }
         }
     }
 

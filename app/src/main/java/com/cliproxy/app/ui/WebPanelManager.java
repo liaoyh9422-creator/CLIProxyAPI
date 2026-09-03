@@ -63,7 +63,7 @@ public class WebPanelManager {
         titleCol.setLayoutParams(tlp);
 
         TextView titleText = new TextView(activity);
-        titleText.setText("CLIProxy 管理中心|默认后台管理密码:cliproxy123");
+        titleText.setText("CLIProxy|默认密码:[cliproxy123]");
         titleText.setTextSize(12);
         titleText.setTextColor(Color.parseColor(UiTheme.C_TEXT));
         titleText.setTypeface(Typeface.DEFAULT_BOLD);
