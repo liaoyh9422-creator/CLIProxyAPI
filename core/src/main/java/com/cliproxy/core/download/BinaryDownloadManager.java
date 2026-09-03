@@ -22,6 +22,7 @@ import java.util.concurrent.Executors;
 public class BinaryDownloadManager {
     private static final String TAG = "BinaryDownloadManager";
 
+    public static final String KEY_GLIBC = "glibc";
     public static final String KEY_CLIPROXY = "cliproxy";
     public static final String KEY_CLOUDFLARED = "cloudflared";
     public static final String KEY_TAILSCALE = "tailscale";
@@ -30,6 +31,9 @@ public class BinaryDownloadManager {
     private static final String BASE_URL = "https://gitee.com/ishark666/cliproxy-release/raw/master/";
     private static final String BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
+    private static final String[] PARTS_GLIBC = {
+        "glibc-libs-arm64.tar.gz"
+    };
     private static final String[] PARTS_CLIPROXY = {
         "cliproxy-arm64.tar.gz.part00",
         "cliproxy-arm64.tar.gz.part01"
@@ -42,6 +46,7 @@ public class BinaryDownloadManager {
         "tailscale-arm64.tar.gz.part01"
     };
 
+    public static final String SHA256_GLIBC = "cfd1adb3303defae5ff58a68d7bdfc423d61998034a342562d5528e21a9a7b3d";
     public static final String SHA256_CLIPROXY = "a01f32c0dba0c131e9e4fb1e42a2b654b5b6b6733448a322aea8ee9a4bac90aa";
     public static final String SHA256_CLOUDFLARED = "17d4de0fa39b7b166aa88893b45f826947a50a0a48b82aeefd0242499ee64dde";
     public static final String SHA256_TAILSCALE = "a3d577e6f98ead125c1e50894e7fabfd4abab5b578d671b6200c57ebbc8d4208";
@@ -53,6 +58,20 @@ public class BinaryDownloadManager {
         void onStatus(String statusText);
         void onSuccess(File targetDir);
         void onFailure(String errorMessage);
+    }
+
+    /** 检测 Glibc 基础运行库是否就绪（内置 assets 或已解压在 filesDir/glibc） */
+    public static boolean isGlibcReady(Context context) {
+        File glibcDir = new File(context.getFilesDir(), "glibc");
+        File marker = new File(glibcDir, ".done");
+        File libc = new File(glibcDir, "usr/lib/aarch64-linux-gnu/libc.so.6");
+        if (marker.exists() && libc.exists()) return true;
+
+        try (InputStream is = context.getAssets().open("glibc-libs-arm64.tar.bin")) {
+            return is != null;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** 检测 CLIProxy 核心是否就绪（内置 nativeLibraryDir 或已外置下载至 filesDir） */
@@ -113,6 +132,12 @@ public class BinaryDownloadManager {
             long approxTotalBytes;
 
             switch (key) {
+                case KEY_GLIBC:
+                    parts = PARTS_GLIBC;
+                    expectedSha = SHA256_GLIBC;
+                    compName = "Glibc 基础运行库";
+                    approxTotalBytes = 4_874_682L;
+                    break;
                 case KEY_CLIPROXY:
                     parts = PARTS_CLIPROXY;
                     expectedSha = SHA256_CLIPROXY;
@@ -201,25 +226,60 @@ public class BinaryDownloadManager {
                 if (listener != null) listener.onStatus("校验通过，正在解压安装...");
 
                 // 解压安装
-                unpackTarGz(mergedArchive, filesDir);
-                mergedArchive.delete();
+                if (KEY_GLIBC.equals(key)) {
+                    File glibcDir = new File(filesDir, "glibc");
+                    glibcDir.mkdirs();
+                    unpackTarGz(mergedArchive, glibcDir);
+                    mergedArchive.delete();
 
-                // 针对特定组件处理可执行权限
-                if (KEY_CLIPROXY.equals(key)) {
-                    File so = new File(filesDir, "libcliproxy.so");
-                    if (so.exists()) so.setExecutable(true, false);
-                } else if (KEY_CLOUDFLARED.equals(key)) {
-                    File bin = new File(filesDir, "cloudflared.bin");
-                    File target = new File(filesDir, "cloudflared");
-                    if (bin.exists() && !target.exists()) {
-                        bin.renameTo(target);
+                    File libDir = new File(glibcDir, "usr/lib/aarch64-linux-gnu");
+                    if (libDir.exists()) {
+                        File[] libs = libDir.listFiles();
+                        if (libs != null) {
+                            for (File lib : libs) lib.setReadable(true, false);
+                        }
                     }
-                    if (target.exists()) target.setExecutable(true, false);
-                } else if (KEY_TAILSCALE.equals(key)) {
-                    File ts = new File(filesDir, "tailscale");
-                    File tsd = new File(filesDir, "tailscaled");
-                    if (ts.exists()) ts.setExecutable(true, false);
-                    if (tsd.exists()) tsd.setExecutable(true, false);
+                    File binDir = new File(glibcDir, "usr/bin");
+                    if (binDir.exists()) {
+                        File[] bins = binDir.listFiles();
+                        if (bins != null) {
+                            for (File bin : bins) {
+                                bin.setExecutable(true, false);
+                                bin.setReadable(true, false);
+                            }
+                        }
+                    }
+                    try {
+                        int versionCode = 0;
+                        try {
+                            versionCode = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
+                        } catch (Exception ignored) {}
+                        File marker = new File(glibcDir, ".done");
+                        try (FileOutputStream fos = new FileOutputStream(marker)) {
+                            fos.write(String.valueOf(versionCode).getBytes());
+                        }
+                    } catch (Exception ignored) {}
+                } else {
+                    unpackTarGz(mergedArchive, filesDir);
+                    mergedArchive.delete();
+
+                    // 针对特定组件处理可执行权限
+                    if (KEY_CLIPROXY.equals(key)) {
+                        File so = new File(filesDir, "libcliproxy.so");
+                        if (so.exists()) so.setExecutable(true, false);
+                    } else if (KEY_CLOUDFLARED.equals(key)) {
+                        File bin = new File(filesDir, "cloudflared.bin");
+                        File target = new File(filesDir, "cloudflared");
+                        if (bin.exists() && !target.exists()) {
+                            bin.renameTo(target);
+                        }
+                        if (target.exists()) target.setExecutable(true, false);
+                    } else if (KEY_TAILSCALE.equals(key)) {
+                        File ts = new File(filesDir, "tailscale");
+                        File tsd = new File(filesDir, "tailscaled");
+                        if (ts.exists()) ts.setExecutable(true, false);
+                        if (tsd.exists()) tsd.setExecutable(true, false);
+                    }
                 }
 
                 if (listener != null) {

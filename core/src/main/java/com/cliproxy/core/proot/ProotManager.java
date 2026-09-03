@@ -124,6 +124,16 @@ public class ProotManager {
         glibcDir.mkdirs();
         new File(libPath).mkdirs();
 
+        boolean hasAsset = false;
+        try (InputStream is = context.getAssets().open("glibc-libs-arm64.tar.bin")) {
+            hasAsset = (is != null);
+        } catch (Exception ignored) {}
+
+        if (!hasAsset) {
+            // Lite 模式：如果未下载则返回 false
+            return false;
+        }
+
         try {
             InputStream is = context.getAssets().open("glibc-libs-arm64.tar.bin");
             File tarFile = new File(glibcDir, "glibc-libs.tar.gz");

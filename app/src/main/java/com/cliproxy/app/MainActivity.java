@@ -2636,6 +2636,10 @@ public class MainActivity extends Activity {
     }
 
     private void startServer() {
+        if (!BinaryDownloadManager.isGlibcReady(this)) {
+            showBinaryDownloadDialog("Glibc 基础运行库", BinaryDownloadManager.KEY_GLIBC, this::startServer);
+            return;
+        }
         if (!BinaryDownloadManager.isCliproxyReady(this)) {
             showBinaryDownloadDialog("CLIProxy 核心代理", BinaryDownloadManager.KEY_CLIPROXY, this::startServer);
             return;
