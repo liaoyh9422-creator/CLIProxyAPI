@@ -82,11 +82,12 @@ public class MainActivity extends Activity {
     private View pageTunnel;
     private View pageTailscale;
     private View pageMetrics;
+    private View pageAbout;
     private View pageGuestShare;
     private LinearLayout guestShareListContainer;
 
-    private LinearLayout tabServicePill, tabTunnelPill, tabTailscalePill, tabMetricsPill;
-    private ImageView tabServiceIcon, tabTunnelIcon, tabTailscaleIcon, tabMetricsIcon;
+    private LinearLayout tabServicePill, tabTunnelPill, tabTailscalePill, tabMetricsPill, tabAboutPill;
+    private ImageView tabServiceIcon, tabTunnelIcon, tabTailscaleIcon, tabMetricsIcon, tabAboutIcon;
 
     // 服务状态与操作按键
     private TextView statusText;
@@ -252,6 +253,11 @@ public class MainActivity extends Activity {
         pageMetrics.setVisibility(View.GONE);
         contentContainer.addView(pageMetrics);
 
+        // Tab 4: 关于页面
+        pageAbout = buildAboutPage();
+        pageAbout.setVisibility(View.GONE);
+        contentContainer.addView(pageAbout);
+
         // 二级页面：外网共享API 专属管理页
         pageGuestShare = buildGuestSharePage();
         pageGuestShare.setVisibility(View.GONE);
@@ -332,6 +338,21 @@ public class MainActivity extends Activity {
         tab3.setOnClickListener(v -> selectTab(3));
         bar.addView(tab3);
 
+        // Tab 4: 关于 (About)
+        LinearLayout tab4 = new LinearLayout(this);
+        tab4.setGravity(Gravity.CENTER);
+        tab4.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        tabAboutPill = new LinearLayout(this);
+        tabAboutPill.setGravity(Gravity.CENTER);
+        tabAboutPill.setLayoutParams(new LinearLayout.LayoutParams(UiTheme.dp(this, 46), UiTheme.dp(this, 26)));
+        tabAboutIcon = new ImageView(this);
+        tabAboutIcon.setImageResource(R.drawable.ic_tab_about);
+        tabAboutIcon.setLayoutParams(new ViewGroup.LayoutParams(UiTheme.dp(this, 19), UiTheme.dp(this, 19)));
+        tabAboutPill.addView(tabAboutIcon);
+        tab4.addView(tabAboutPill);
+        tab4.setOnClickListener(v -> selectTab(4));
+        bar.addView(tab4);
+
         updateTabIcons(0);
         return bar;
     }
@@ -342,6 +363,7 @@ public class MainActivity extends Activity {
         pageTunnel.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
         pageTailscale.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
         pageMetrics.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+        pageAbout.setVisibility(index == 4 ? View.VISIBLE : View.GONE);
         updateTabIcons(index);
 
         if (index == 3) {
@@ -365,6 +387,10 @@ public class MainActivity extends Activity {
         boolean a3 = (activeIndex == 3);
         tabMetricsIcon.setColorFilter(Color.parseColor(a3 ? UiTheme.C_BLUE : UiTheme.C_DIM));
         tabMetricsPill.setBackground(a3 ? UiTheme.roundRect(this, "#1F2B3E", null, 0, 13) : null);
+
+        boolean a4 = (activeIndex == 4);
+        tabAboutIcon.setColorFilter(Color.parseColor(a4 ? UiTheme.C_BLUE : UiTheme.C_DIM));
+        tabAboutPill.setBackground(a4 ? UiTheme.roundRect(this, "#1F2B3E", null, 0, 13) : null);
     }
 
     // ==================== 3. Tab 0: 服务控制台与 API 端点 ====================
@@ -3196,6 +3222,139 @@ public class MainActivity extends Activity {
                 }
                 if (tsLogScroll != null) tsLogScroll.post(() -> tsLogScroll.fullScroll(ScrollView.FOCUS_DOWN));
             } catch (Exception ignored) {}
+        }
+    }
+
+    // ==================== Tab 4: 关于 (About) ====================
+
+    private View buildAboutPage() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        scroll.setFillViewport(true);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setLayoutParams(new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        layout.setPadding(UiTheme.dp(this, 16), UiTheme.dp(this, 28), UiTheme.dp(this, 16), UiTheme.dp(this, 24));
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        // 1. 顶部 Header 居中区域
+        ImageView iconView = new ImageView(this);
+        iconView.setImageResource(R.mipmap.ic_launcher);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(UiTheme.dp(this, 62), UiTheme.dp(this, 62));
+        ilp.bottomMargin = UiTheme.dp(this, 10);
+        iconView.setLayoutParams(ilp);
+        layout.addView(iconView);
+
+        TextView tvAppName = new TextView(this);
+        tvAppName.setText("CLIProxyAPI");
+        tvAppName.setTextSize(18);
+        tvAppName.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvAppName.setTypeface(Typeface.DEFAULT_BOLD);
+        tvAppName.setGravity(Gravity.CENTER);
+        layout.addView(tvAppName);
+
+        TextView tvEdition = new TextView(this);
+        String editionStr = "v1.2.0 · " + (BuildConfig.IS_LITE ? "Lite (1.2MB)" : "Full (50MB)");
+        tvEdition.setText(editionStr);
+        tvEdition.setTextSize(11);
+        tvEdition.setTextColor(Color.parseColor(UiTheme.C_CYAN));
+        tvEdition.setTypeface(Typeface.MONOSPACE);
+        tvEdition.setGravity(Gravity.CENTER);
+        tvEdition.setPadding(0, UiTheme.dp(this, 4), 0, UiTheme.dp(this, 20));
+        layout.addView(tvEdition);
+
+        // 2. iOS 极简单行卡片
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(UiTheme.roundRect(this, UiTheme.C_SURFACE, UiTheme.C_BORDER, 1, 8));
+        card.setPadding(UiTheme.dp(this, 12), UiTheme.dp(this, 4), UiTheme.dp(this, 12), UiTheme.dp(this, 4));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        card.setLayoutParams(clp);
+
+        // 行 1: 版本信息
+        card.addView(buildAboutRow("版本信息", "v1.2.0 (3)", null, v -> copyToClipboard("版本号", "1.2.0")));
+        card.addView(buildAboutDivider());
+
+        // 行 2: 运行底座
+        card.addView(buildAboutRow("运行底座", "PRoot / arm64", null, null));
+        card.addView(buildAboutDivider());
+
+        // 行 3: 开源仓库 (我发布的开源)
+        card.addView(buildAboutRow("开源仓库", "GitHub ↗", UiTheme.C_BLUE, v -> openBrowserUrl("https://github.com/liaoyh9422-creator/CLIProxyAPI")));
+        card.addView(buildAboutDivider());
+
+        // 行 4: 核心上游
+        card.addView(buildAboutRow("核心上游", "Upstream ↗", UiTheme.C_BLUE, v -> openBrowserUrl("https://github.com/router-for-me/CLIProxyAPI")));
+        card.addView(buildAboutDivider());
+
+        // 行 5: 交流群聊
+        final String qqUrl = "https://qun.qq.com/universal-share/share?ac=1&authKey=SbZHuQnLpmbg5dCOJ7ep1ci0l9RR2wetQuESdr%2Fsl7gz0pYKt8q42cA1xf%2BIAEz%2F&busi_data=eyJncm91cENvZGUiOiI5NjQzODIyMDciLCJ0b2tlbiI6IlN4dFVKblp3OXpFbXBmMUFaa0pUODc2bUU5UkNTVjQxUTM2SkVHK1d5c0d2WnJvZnlUNnpiVXpMRUhBQ0xiMmsiLCJ1aW4iOiI5OTUyNzc4MiJ9&data=TnnV-z6q8BjHv3PbEoG_mSi-6ceVaXKShIveW_l8_dZ0WsV8MQ2xLwYFDqC7ihgCN-SI0n064l57DrQBaYW3Cw&svctype=4&tempid=h5_group_info";
+        card.addView(buildAboutRow("交流群聊", "加入 QQ 群 ↗", UiTheme.C_CYAN, v -> openBrowserUrl(qqUrl)));
+        card.addView(buildAboutDivider());
+
+        // 行 6: 开源协议
+        card.addView(buildAboutRow("开源协议", "MIT ↗", UiTheme.C_BLUE, v -> openBrowserUrl("https://github.com/liaoyh9422-creator/CLIProxyAPI/blob/main/LICENSE")));
+
+        layout.addView(card);
+
+        // 3. 底部版权 Footer
+        TextView tvFooter = new TextView(this);
+        tvFooter.setText("CLIProxyAPI for Android\nOpen source with MIT License");
+        tvFooter.setTextSize(11);
+        tvFooter.setTextColor(Color.parseColor(UiTheme.C_DIM));
+        tvFooter.setGravity(Gravity.CENTER);
+        tvFooter.setPadding(0, UiTheme.dp(this, 30), 0, UiTheme.dp(this, 10));
+        layout.addView(tvFooter);
+
+        scroll.addView(layout);
+        return scroll;
+    }
+
+    private View buildAboutRow(String label, String value, String valueColorHex, View.OnClickListener onClick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(UiTheme.dp(this, 4), UiTheme.dp(this, 12), UiTheme.dp(this, 4), UiTheme.dp(this, 12));
+
+        TextView tvLabel = new TextView(this);
+        tvLabel.setText(label);
+        tvLabel.setTextSize(12.5f);
+        tvLabel.setTextColor(Color.parseColor(UiTheme.C_TEXT));
+        tvLabel.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tvLabel);
+
+        TextView tvValue = new TextView(this);
+        tvValue.setText(value);
+        tvValue.setTextSize(12f);
+        tvValue.setTypeface(Typeface.MONOSPACE);
+        String color = (valueColorHex != null) ? valueColorHex : UiTheme.C_DIM;
+        tvValue.setTextColor(Color.parseColor(color));
+        row.addView(tvValue);
+
+        if (onClick != null) {
+            row.setClickable(true);
+            row.setFocusable(true);
+            row.setOnClickListener(onClick);
+        }
+        return row;
+    }
+
+    private View buildAboutDivider() {
+        View div = new View(this);
+        div.setBackgroundColor(Color.parseColor(UiTheme.C_BORDER_SUB));
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 1));
+        div.setLayoutParams(dlp);
+        return div;
+    }
+
+    private void openBrowserUrl(String url) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this, "无法打开链接: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
