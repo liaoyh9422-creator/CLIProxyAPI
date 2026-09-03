@@ -118,9 +118,9 @@ public class TailscaleManager {
                     return;
                 }
 
-                // 清理可能存在的旧 sock 文件与旧进程
+                // 清理可能存在的旧 sock 文件与旧进程（仅清理 Tailscale 自身，绝不误杀主服务）
                 if (sockFile.exists()) sockFile.delete();
-                ProcessUtil.killOrphanedProcesses(filesDir, 0);
+                ProcessUtil.killProcessesNamed("tailscaled", "tailscale");
 
                 writeLog("▶ 启动 tailscaled 守护进程 (userspace 模式，不占系统 VPN)...\n");
                 if (listener != null) listener.onStatusChanged("启动守护进程...", "", "");
@@ -200,6 +200,22 @@ public class TailscaleManager {
                     writeLog("\n✅ 成功加入 Tailnet 局域网!\n");
                     writeLog("● 节点名称: " + actualHost + "\n");
                     writeLog("● 节点 IPv4: " + tailscaleIp + "\n");
+
+                    // 开启用户态端口映射，打通入站访问
+                    try {
+                        writeLog("▶ 配置 Tailscale 用户态端口转发 (:8317)...\n");
+                        ProcessBuilder pbServe = new ProcessBuilder(
+                                tailscaleBin.getAbsolutePath(),
+                                "--socket=" + sockFile.getAbsolutePath(),
+                                "serve", "--bg", "--tcp=8317", "127.0.0.1:8317"
+                        );
+                        pbServe.redirectErrorStream(true);
+                        Process pServe = pbServe.start();
+                        pServe.waitFor(5, TimeUnit.SECONDS);
+                    } catch (Exception serveErr) {
+                        Log.w(TAG, "tailscale serve setup fallback: " + serveErr.getMessage());
+                    }
+
                     writeLog("● 服务入口: http://" + tailscaleIp + ":8317/v1\n\n");
                     if (listener != null) listener.onStatusChanged("已就绪", tailscaleIp, magicDns);
                 } else {
@@ -244,6 +260,14 @@ public class TailscaleManager {
             try {
                 writeLog("\n▶ 正在断开 Tailscale 局域网...\n");
                 if (sockFile.exists()) {
+                    try {
+                        ProcessBuilder pbServeReset = new ProcessBuilder(
+                                tailscaleBin.getAbsolutePath(),
+                                "--socket=" + sockFile.getAbsolutePath(),
+                                "serve", "reset"
+                        );
+                        pbServeReset.start().waitFor(2, TimeUnit.SECONDS);
+                    } catch (Exception ignored) {}
                     try {
                         ProcessBuilder pb = new ProcessBuilder(
                                 tailscaleBin.getAbsolutePath(),

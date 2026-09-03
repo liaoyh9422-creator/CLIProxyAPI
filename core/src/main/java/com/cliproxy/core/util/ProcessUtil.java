@@ -93,18 +93,15 @@ public class ProcessUtil {
         process.destroyForcibly();
     }
 
-    /** 清理同应用 UID 下的孤儿/残留进程并释放监听端口 */
-    public static void killOrphanedProcesses(File filesDir, int serverPort) {
+    /** 针对特定组件名称清理进程，避免误杀无关友军进程 */
+    public static void killProcessesNamed(String... keywords) {
+        if (keywords == null || keywords.length == 0) return;
         try {
-            // 原生扫描 /proc 匹配并清理残留子进程
-            killProcessesMatching("cli-proxy-api", "libcliproxy.so", "libproot.so", "cloudflared", "tailscaled", "tailscale");
-
-            // 命令行辅助清理
-            String[] patterns = {"cli-proxy-api", "libcliproxy.so", "proot", "cloudflared", "tailscaled", "tailscale"};
-            for (String pattern : patterns) {
+            killProcessesMatching(keywords);
+            for (String kw : keywords) {
                 try {
                     ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c",
-                            "pkill -9 -f '" + pattern + "' 2>/dev/null");
+                            "pkill -9 -f '" + kw + "' 2>/dev/null");
                     pb.redirectErrorStream(true);
                     Process p = pb.start();
                     byte[] buf = new byte[1024];
@@ -114,8 +111,13 @@ public class ProcessUtil {
                 } catch (Exception ignored) {}
             }
         } catch (Exception e) {
-            Log.w(TAG, "killOrphanedProcesses error: " + e.getMessage());
+            Log.w(TAG, "killProcessesNamed error: " + e.getMessage());
         }
+    }
+
+    /** 清理同应用 UID 下的孤儿/残留进程并释放监听端口 */
+    public static void killOrphanedProcesses(File filesDir, int serverPort) {
+        killProcessesNamed("cli-proxy-api", "libcliproxy.so", "libproot.so", "cloudflared", "tailscaled", "tailscale");
     }
 
     /** 扫描 /proc/ 遍历属于本应用的所有进程并杀死 */

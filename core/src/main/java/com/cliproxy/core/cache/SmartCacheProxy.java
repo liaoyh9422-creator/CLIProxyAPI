@@ -418,6 +418,7 @@ public class SmartCacheProxy {
                 JSONObject chunkObj = new JSONObject();
                 chunkObj.put("id", "chatcmpl-cache");
                 chunkObj.put("object", "chat.completion.chunk");
+                chunkObj.put("created", System.currentTimeMillis() / 1000);
                 chunkObj.put("model", cached.model);
                 chunkObj.put("choices", choices);
 
@@ -444,8 +445,16 @@ public class SmartCacheProxy {
             JSONObject resObj = new JSONObject();
             resObj.put("id", "chatcmpl-cache");
             resObj.put("object", "chat.completion");
+            resObj.put("created", System.currentTimeMillis() / 1000);
             resObj.put("model", cached.model);
+            resObj.put("system_fingerprint", "fp_cliproxy_cache");
             resObj.put("choices", choices);
+
+            JSONObject usage = new JSONObject();
+            usage.put("prompt_tokens", 0);
+            usage.put("completion_tokens", cached.tokenCount);
+            usage.put("total_tokens", cached.tokenCount);
+            resObj.put("usage", usage);
 
             byte[] jsonBytes = resObj.toString().getBytes(StandardCharsets.UTF_8);
 

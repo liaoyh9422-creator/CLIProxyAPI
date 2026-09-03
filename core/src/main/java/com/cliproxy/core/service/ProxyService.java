@@ -76,6 +76,11 @@ public class ProxyService extends Service {
     private final Object startLock = new Object();
     private volatile boolean isStarting = false;
 
+    // 聚合通知状态感知字段
+    private volatile String currentCoreStatus = "服务初始化中...";
+    private volatile String currentTunnelStatus = "";
+    private volatile String currentTailscaleStatus = "";
+
     /** 静态便捷启动前台服务 */
     public static void start(Context context) {
         try {
@@ -167,33 +172,44 @@ public class ProxyService extends Service {
             String mode = intent.getStringExtra(EXTRA_TUNNEL_MODE);
             String cmd = intent.getStringExtra(EXTRA_TUNNEL_CMD);
             int port = intent.getIntExtra(EXTRA_SERVER_PORT, serverPort);
-            new Thread(() -> tunnelManager.startTunnel(mode, cmd, port, this::updateNotification)).start();
+            onTunnelStatusChanged("隧道启动中...");
+            new Thread(() -> tunnelManager.startTunnel(mode, cmd, port, this::onTunnelStatusChanged)).start();
             return START_STICKY;
         }
 
         if (ACTION_STOP_TUNNEL.equals(action)) {
             tunnelManager.stopTunnel();
+            onTunnelStatusChanged("");
             return START_STICKY;
         }
 
         if (ACTION_START_TAILSCALE.equals(action)) {
             String authKey = intent.getStringExtra(EXTRA_TAILSCALE_AUTHKEY);
             String hostname = intent.getStringExtra(EXTRA_TAILSCALE_HOSTNAME);
+            onTailscaleStatusChanged("连接中...", "");
             tailscaleManager.start(authKey, hostname, (status, ip, dns) -> {
-                if (!ip.isEmpty()) {
-                    updateNotification("Tailscale: " + ip + " | :" + serverPort);
-                }
+                onTailscaleStatusChanged(status, ip);
             });
             return START_STICKY;
         }
 
         if (ACTION_STOP_TAILSCALE.equals(action)) {
             tailscaleManager.stop(null);
+            onTailscaleStatusChanged("", "");
             return START_STICKY;
         }
 
         userInitiatedStop = false;
-        startForeground(NOTIFICATION_ID, buildNotification("服务初始化中..."));
+
+        // 心跳或重复启动防倒退：如果核心进程已在运行，直接刷新通知并排期心跳，绝不倒退回“服务初始化中...”
+        if (isStarting || (proxyProcess != null && proxyProcess.isAlive())) {
+            updateAggregatedNotification();
+            scheduleHeartbeat(this);
+            return START_STICKY;
+        }
+
+        currentCoreStatus = "服务初始化中...";
+        startForeground(NOTIFICATION_ID, buildAggregatedNotification());
         new Thread(this::startProxyServer, "proxy-starter").start();
         scheduleHeartbeat(this);
         return START_STICKY;
@@ -283,8 +299,8 @@ public class ProxyService extends Service {
                 }
                 String yaml = baos.toString("UTF-8");
                 yaml = yaml.replaceAll("(?m)^port:\\s*\\d+", "port: " + backendPort);
-                yaml = yaml.replaceAll("(?m)^host:\\s*\".*\"", "host: \"127.0.0.1\"");
-                yaml = yaml.replaceAll("(?m)^auth-dir:\\s*\".*\"", "auth-dir: \"" + authDir.getAbsolutePath() + "\"");
+                yaml = yaml.replaceAll("(?m)^host:\\s*.*", "host: \"127.0.0.1\"");
+                yaml = yaml.replaceAll("(?m)^auth-dir:\\s*.*", "auth-dir: \"" + authDir.getAbsolutePath() + "\"");
                 try (FileOutputStream fos = new FileOutputStream(runtimeConfigFile)) {
                     fos.write(yaml.getBytes("UTF-8"));
                 }
@@ -443,8 +459,30 @@ public class ProxyService extends Service {
         }
     }
 
-    /** 构建前台常驻通知 */
-    private Notification buildNotification(String text) {
+    /** 聚合通知更新回调 */
+    private synchronized void updateCoreStatus(String status) {
+        this.currentCoreStatus = status != null ? status : "";
+        updateAggregatedNotification();
+    }
+
+    private synchronized void onTunnelStatusChanged(String status) {
+        this.currentTunnelStatus = status != null ? status : "";
+        updateAggregatedNotification();
+    }
+
+    private synchronized void onTailscaleStatusChanged(String status, String ip) {
+        if (ip != null && !ip.isEmpty()) {
+            this.currentTailscaleStatus = ip;
+        } else if (status != null && !status.isEmpty() && !"已就绪".equals(status)) {
+            this.currentTailscaleStatus = status;
+        } else {
+            this.currentTailscaleStatus = "";
+        }
+        updateAggregatedNotification();
+    }
+
+    /** 构建前台常驻聚合感知通知 */
+    private Notification buildAggregatedNotification() {
         Intent notifIntent = new Intent();
         notifIntent.setClassName(getPackageName(), "com.cliproxy.app.MainActivity");
         notifIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -458,18 +496,63 @@ public class ProxyService extends Service {
         } else {
             builder = new Notification.Builder(this);
         }
-        return builder.setContentTitle(projectName)
-                .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_menu_info_details)
+
+        boolean isServerRunning = (proxyProcess != null && proxyProcess.isAlive());
+        String titleStatus = isServerRunning ? "🟢 运行中" : currentCoreStatus;
+        builder.setContentTitle(projectName + " · " + titleStatus);
+
+        StringBuilder summary = new StringBuilder();
+        if (isServerRunning) {
+            summary.append("本地 :").append(serverPort);
+        } else {
+            summary.append(currentCoreStatus);
+        }
+
+        if (currentTunnelStatus != null && !currentTunnelStatus.isEmpty()) {
+            summary.append(" | 🌐 ").append(currentTunnelStatus);
+        }
+        if (currentTailscaleStatus != null && !currentTailscaleStatus.isEmpty()) {
+            summary.append(" | 🔒 ").append(currentTailscaleStatus);
+        }
+        builder.setContentText(summary.toString());
+
+        Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
+        StringBuilder bigContent = new StringBuilder();
+        if (isServerRunning) {
+            bigContent.append("● 本地端口: http://127.0.0.1:").append(serverPort);
+            if (smartCacheProxy != null) {
+                bigContent.append(" (⚡5ms秒回)");
+            }
+        } else {
+            bigContent.append("● 核心状态: ").append(currentCoreStatus);
+        }
+
+        if (currentTunnelStatus != null && !currentTunnelStatus.isEmpty()) {
+            bigContent.append("\n● 公网穿透: ").append(currentTunnelStatus);
+        }
+        if (currentTailscaleStatus != null && !currentTailscaleStatus.isEmpty()) {
+            bigContent.append("\n● 局域网IP: ").append(currentTailscaleStatus);
+        }
+        bigStyle.bigText(bigContent.toString());
+        builder.setStyle(bigStyle);
+
+        builder.setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setContentIntent(pi)
-                .setOngoing(true)
-                .build();
+                .setOngoing(isServerRunning || isStarting);
+
+        return builder.build();
     }
 
-    /** 更新常驻通知文本 */
+    private void updateAggregatedNotification() {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(NOTIFICATION_ID, buildAggregatedNotification());
+        } catch (Exception ignored) {}
+    }
+
+    /** 更新常驻通知文本（向后兼容接口） */
     private void updateNotification(String text) {
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(text));
+        updateCoreStatus(text);
     }
 
     private static void copyFileHelper(File src, File dst) {

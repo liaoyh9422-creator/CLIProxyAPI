@@ -40,6 +40,8 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
     private final LruCache<String, CacheEntry> memoryCache;
     private final AtomicLong totalHits = new AtomicLong(0);
     private final AtomicLong totalSavedTokens = new AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger cachedEntriesCount = new java.util.concurrent.atomic.AtomicInteger(-1);
+    private static final java.util.concurrent.ExecutorService dbExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
     public static synchronized ResponseCacheDb getInstance(Context context) {
         if (instance == null) {
@@ -107,14 +109,14 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
 
                     // 异步更新命中次数与最后访问时间
                     final int fHits = hits;
-                    new Thread(() -> {
+                    dbExecutor.execute(() -> {
                         try {
                             ContentValues cv = new ContentValues();
                             cv.put("hit_count", fHits);
                             cv.put("last_accessed_at", System.currentTimeMillis());
                             getWritableDatabase().update(TABLE_NAME, cv, "cache_key = ?", new String[]{cacheKey});
                         } catch (Exception ignored) {}
-                    }).start();
+                    });
 
                     return entry;
                 }
@@ -130,8 +132,9 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
 
         CacheEntry entry = new CacheEntry(cacheKey, model, promptSummary, responseContent, tokenCount, 1);
         memoryCache.put(cacheKey, entry);
+        cachedEntriesCount.set(-1);
 
-        new Thread(() -> {
+        dbExecutor.execute(() -> {
             try {
                 SQLiteDatabase db = getWritableDatabase();
                 ContentValues cv = new ContentValues();
@@ -150,7 +153,7 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
                 db.execSQL("DELETE FROM " + TABLE_NAME + " WHERE cache_key NOT IN (" +
                         "SELECT cache_key FROM " + TABLE_NAME + " ORDER BY last_accessed_at DESC LIMIT 5000);");
             } catch (Exception ignored) {}
-        }).start();
+        });
     }
 
     /** 清空所有缓存 */
@@ -158,11 +161,12 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
         memoryCache.evictAll();
         totalHits.set(0);
         totalSavedTokens.set(0);
-        new Thread(() -> {
+        cachedEntriesCount.set(0);
+        dbExecutor.execute(() -> {
             try {
                 getWritableDatabase().delete(TABLE_NAME, null, null);
             } catch (Exception ignored) {}
-        }).start();
+        });
     }
 
     public long getTotalHits() { return totalHits.get(); }
@@ -192,20 +196,27 @@ public class ResponseCacheDb extends SQLiteOpenHelper {
     /** 删除单条缓存 */
     public void deleteEntry(String cacheKey) {
         memoryCache.remove(cacheKey);
-        new Thread(() -> {
+        cachedEntriesCount.set(-1);
+        dbExecutor.execute(() -> {
             try {
                 getWritableDatabase().delete(TABLE_NAME, "cache_key = ?", new String[]{cacheKey});
             } catch (Exception ignored) {}
-        }).start();
+        });
     }
 
-    /** 获取数据库总缓存条数 */
+    /** 获取数据库总缓存条数（带内存缓存加速，避免主线程高频磁盘 I/O 阻塞） */
     public int getCachedEntriesCount() {
+        int cnt = cachedEntriesCount.get();
+        if (cnt >= 0) {
+            return cnt;
+        }
         try {
             SQLiteDatabase db = getReadableDatabase();
             try (Cursor c = db.rawQuery("SELECT COUNT(*) FROM " + TABLE_NAME, null)) {
                 if (c != null && c.moveToFirst()) {
-                    return c.getInt(0);
+                    cnt = c.getInt(0);
+                    cachedEntriesCount.set(cnt);
+                    return cnt;
                 }
             }
         } catch (Exception ignored) {}

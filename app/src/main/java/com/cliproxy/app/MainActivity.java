@@ -415,7 +415,27 @@ public class MainActivity extends Activity {
 
                     int idx = yaml.indexOf("api-keys:");
                     if (idx != -1) {
-                        int nextSection = yaml.indexOf("\n\n", idx);
+                        int nextSection = -1;
+                        int currentPos = idx + "api-keys:".length();
+                        int firstNewline = yaml.indexOf('\n', currentPos);
+                        if (firstNewline != -1) {
+                            int lineStart = firstNewline + 1;
+                            while (lineStart < yaml.length()) {
+                                int lineEnd = yaml.indexOf('\n', lineStart);
+                                if (lineEnd == -1) lineEnd = yaml.length();
+                                String line = yaml.substring(lineStart, lineEnd);
+                                String trimmed = line.trim();
+
+                                // 如果这一行非空，且不以空格、tab或'-'开头，说明是后续的顶层配置或顶层注释，界定为 nextSection
+                                if (!trimmed.isEmpty()) {
+                                    if (!line.startsWith(" ") && !line.startsWith("\t") && !line.startsWith("-")) {
+                                        nextSection = lineStart;
+                                        break;
+                                    }
+                                }
+                                lineStart = lineEnd + 1;
+                            }
+                        }
                         if (nextSection == -1) nextSection = yaml.length();
 
                         StringBuilder sb = new StringBuilder();
@@ -442,6 +462,34 @@ public class MainActivity extends Activity {
     }
 
     public void initGuestPolicies() {
+        // 注册多客用密钥配额消耗实时监听器，实现实时自动持久化与界面刷新
+        SmartCacheProxy.setMultiQuotaListener((key, remaining, total) -> {
+            new Thread(() -> {
+                try {
+                    String json = prefs.getString("guest_keys_json", "[]");
+                    JSONArray arr = new JSONArray(json);
+                    boolean modified = false;
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject obj = arr.optJSONObject(i);
+                        if (obj != null && key.equals(obj.optString("key"))) {
+                            obj.put("quotaRemaining", remaining);
+                            obj.put("quotaTotal", total);
+                            modified = true;
+                            break;
+                        }
+                    }
+                    if (modified) {
+                        prefs.edit().putString("guest_keys_json", arr.toString()).apply();
+                        handler.post(() -> {
+                            if (tunnelTab != null) {
+                                tunnelTab.refreshGuestShareList();
+                            }
+                        });
+                    }
+                } catch (Exception ignored) {}
+            }, "quota-sync").start();
+        });
+
         syncGuestKeysToProxyAndConfig();
     }
 
@@ -1091,5 +1139,13 @@ public class MainActivity extends Activity {
             return;
         }
         super.onBackPressed();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (handler != null) {
+            handler.removeCallbacksAndMessages(null);
+        }
+        super.onDestroy();
     }
 }

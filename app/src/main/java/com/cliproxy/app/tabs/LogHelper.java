@@ -47,6 +47,9 @@ public class LogHelper {
         if (cleanLine.trim().isEmpty() && rawLine.trim().isEmpty()) return;
 
         fullLog.append(cleanLine).append("\n");
+        if (fullLog.length() > 300_000) {
+            fullLog.delete(0, 100_000);
+        }
 
         int color = getLogColor(cleanLine, index);
 
