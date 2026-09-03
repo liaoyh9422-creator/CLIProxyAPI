@@ -579,6 +579,8 @@ public class SmartCacheProxy {
     }
 
     private void pipeSockets(Socket s1, Socket s2, GuestPolicy policy, boolean isChatCompletion) {
+        java.util.concurrent.atomic.AtomicBoolean isCurrentChat = new java.util.concurrent.atomic.AtomicBoolean(isChatCompletion);
+
         threadPool.execute(() -> {
             try {
                 InputStream is = s1.getInputStream();
@@ -588,6 +590,20 @@ public class SmartCacheProxy {
                 while ((r = is.read(b)) != -1) {
                     os.write(b, 0, r);
                     os.flush();
+
+                    // 嗅探客户端请求行（兼容 HTTP/1.1 Keep-Alive 长连接中复用发送的后续请求）
+                    if (r > 10) {
+                        String reqPreview = new String(b, 0, Math.min(r, 512), StandardCharsets.UTF_8);
+                        if (reqPreview.startsWith("POST ") || reqPreview.startsWith("GET ") ||
+                            reqPreview.startsWith("PUT ") || reqPreview.startsWith("DELETE ")) {
+                            boolean isChat = reqPreview.startsWith("POST ") && (
+                                    reqPreview.contains("/chat/completions") ||
+                                    reqPreview.contains("/responses") ||
+                                    reqPreview.contains("/v1/messages") ||
+                                    reqPreview.contains("generateContent"));
+                            isCurrentChat.set(isChat);
+                        }
+                    }
                 }
             } catch (Exception ignored) {}
             closeQuietly(s2);
@@ -611,14 +627,25 @@ public class SmartCacheProxy {
                 os.write(b, 0, r);
                 os.flush();
 
-                if (!isChatCompletion) {
+                if (!isCurrentChat.get()) {
                     continue;
                 }
 
-                totalPayloadBytes += r;
-
                 if (r > 6) {
                     String chunkStr = new String(b, 0, r, StandardCharsets.UTF_8);
+
+                    // 1.1 关键：长连接复用感知：若前一轮已结算，当收到新的 HTTP 响应头时重置状态开启新一轮统计
+                    String trimmed = chunkStr.trim();
+                    if (settled && (trimmed.startsWith("HTTP/1.1 ") || trimmed.startsWith("HTTP/1.0 ") || trimmed.startsWith("HTTP/2 "))) {
+                        settled = false;
+                        capturedOfficialTokens = 0;
+                        capturedIn = 0;
+                        capturedOut = 0;
+                        totalPayloadBytes = 0;
+                        capturedTextForEstimation.setLength(0);
+                    }
+
+                    totalPayloadBytes += r;
 
                     // 2. 嗅探官方 Usage 数据
                     Matcher mTotal = PATTERN_TOTAL_TOKENS.matcher(chunkStr);
@@ -663,7 +690,7 @@ public class SmartCacheProxy {
         } catch (Exception ignored) {
         } finally {
             // 5. 异常中断安全兜底：若流式传输被客户端强行掐断（如点停止）且未曾结算，结算已产生的内容
-            if (!settled && isChatCompletion && totalPayloadBytes > 0) {
+            if (!settled && isCurrentChat.get() && totalPayloadBytes > 0) {
                 long finalTokens = resolveTokens(capturedOfficialTokens, capturedIn, capturedOut,
                         capturedTextForEstimation, totalPayloadBytes);
                 settleTokens(finalTokens, policy);
