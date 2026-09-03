@@ -1,0 +1,22 @@
+# CLIProxyAPI 手机端默认配置
+# 配置文件位置: /sdcard/Download/CLIProxyAPI/config.yaml
+
+# 监听地址与端口（空表示绑定所有网络接口，支持手机本机与局域网电脑调用）
+host: ""
+port: 8317
+# TLS 设置（公网 HTTPS 由 Cloudflare 隧道接管）
+tls:
+  enable: false
+# 管理后台设置（允许局域网或内嵌 WebView 访问，默认密钥 cliproxy123）
+remote-management:
+  allow-remote: true
+  secret-key: "$2a$10$CB6gsUwcpjYlfotj1zySPuAdYAYjpDsjcGcdenm/eN.i4wjiBGwGy"
+  disable-control-panel: false
+  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+# 授权凭据持久化存储目录（存放在手机外部公共存储，重装应用不丢失 Token）
+auth-dir: "/sdcard/Download/CLIProxyAPI/auth"
+# 访问 API 密钥（客户端在 Authorization: Bearer <key> 中携带）
+api-keys:
+  - "sk-cliproxy-default"
+# 调试日志
+debug: false
