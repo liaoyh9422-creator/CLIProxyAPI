@@ -36,7 +36,8 @@ public class BinaryDownloadManager {
     };
     private static final String[] PARTS_CLIPROXY = {
         "cliproxy-arm64.tar.gz.part00",
-        "cliproxy-arm64.tar.gz.part01"
+        "cliproxy-arm64.tar.gz.part01",
+        "cliproxy-arm64.tar.gz.part02"
     };
     private static final String[] PARTS_CLOUDFLARED = {
         "cloudflared-arm64.tar.gz"
@@ -47,7 +48,7 @@ public class BinaryDownloadManager {
     };
 
     public static final String SHA256_GLIBC = "cfd1adb3303defae5ff58a68d7bdfc423d61998034a342562d5528e21a9a7b3d";
-    public static final String SHA256_CLIPROXY = "a01f32c0dba0c131e9e4fb1e42a2b654b5b6b6733448a322aea8ee9a4bac90aa";
+    public static final String SHA256_CLIPROXY = "266703a33cb713997ad9605f8291ac011f0d79c4bf7974eb84fedf51e2992813";
     public static final String SHA256_CLOUDFLARED = "17d4de0fa39b7b166aa88893b45f826947a50a0a48b82aeefd0242499ee64dde";
     public static final String SHA256_TAILSCALE = "a3d577e6f98ead125c1e50894e7fabfd4abab5b578d671b6200c57ebbc8d4208";
 
@@ -141,8 +142,8 @@ public class BinaryDownloadManager {
                 case KEY_CLIPROXY:
                     parts = PARTS_CLIPROXY;
                     expectedSha = SHA256_CLIPROXY;
-                    compName = "CLIProxy 核心代理";
-                    approxTotalBytes = 19_154_341L;
+                    compName = "CLIProxy 核心代理 (v8)";
+                    approxTotalBytes = 20_495_090L;
                     break;
                 case KEY_CLOUDFLARED:
                     parts = PARTS_CLOUDFLARED;

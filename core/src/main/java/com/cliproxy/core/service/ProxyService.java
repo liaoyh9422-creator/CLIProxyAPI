@@ -298,9 +298,9 @@ public class ProxyService extends Service {
                     while ((r = fis.read(buf)) != -1) baos.write(buf, 0, r);
                 }
                 String yaml = baos.toString("UTF-8");
-                yaml = yaml.replaceAll("(?m)^port:\\s*\\d+", "port: " + backendPort);
-                yaml = yaml.replaceAll("(?m)^host:\\s*.*", "host: \"127.0.0.1\"");
-                yaml = yaml.replaceAll("(?m)^auth-dir:\\s*.*", "auth-dir: \"" + authDir.getAbsolutePath() + "\"");
+                yaml = yaml.replaceAll("(?m)^(\\s*)port:\\s*\\d+", "$1port: " + backendPort);
+                yaml = yaml.replaceAll("(?m)^(\\s*)host:\\s*.*", "$1host: \"127.0.0.1\"");
+                yaml = yaml.replaceAll("(?m)^(\\s*)auth-dir:\\s*.*", "$1auth-dir: \"" + authDir.getAbsolutePath() + "\"");
                 try (FileOutputStream fos = new FileOutputStream(runtimeConfigFile)) {
                     fos.write(yaml.getBytes("UTF-8"));
                 }
