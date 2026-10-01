@@ -60,7 +60,7 @@ public class AboutTab {
         layout.addView(tvAppName);
 
         TextView tvEdition = new TextView(activity);
-        String editionStr = "v1.2.0 · " + (BuildConfig.IS_LITE ? "Lite (1.2MB)" : "Full (50MB)");
+        String editionStr = "v1.2.1 · " + (BuildConfig.IS_LITE ? "Lite (1.2MB)" : "Full (50MB)");
         tvEdition.setText(editionStr);
         tvEdition.setTextSize(11);
         tvEdition.setTextColor(Color.parseColor(UiTheme.C_CYAN));
@@ -78,7 +78,7 @@ public class AboutTab {
         card.setLayoutParams(clp);
 
         // 行 1: 版本信息
-        card.addView(buildAboutRow("版本信息", "v1.2.0 (3)", null, v -> activity.copyToClipboard("版本号", "1.2.0")));
+        card.addView(buildAboutRow("版本信息", "v1.2.1 (4)", null, v -> activity.copyToClipboard("版本号", "1.2.1")));
         card.addView(buildAboutDivider());
 
         // 行 2: 运行底座
