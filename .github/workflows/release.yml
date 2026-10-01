@@ -1,0 +1,105 @@
+name: Build & Release APKs
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag Name (e.g. v1.2.0)'
+        required: false
+        default: 'v1.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build Lite & Full Release APKs
+        run: ./gradlew assembleLiteRelease assembleFullRelease --stacktrace
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release-apks
+          
+          # 复制并重命名清晰的 APK 安装包
+          cp app/build/outputs/apk/lite/release/app-lite-release.apk release-apks/app-lite-release.apk
+          cp app/build/outputs/apk/full/release/app-full-release.apk release-apks/app-full-release.apk
+          
+          # 计算 SHA-256 校验和
+          cd release-apks
+          sha256sum app-lite-release.apk app-full-release.apk > checksums.txt
+          cat checksums.txt
+          cd ..
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLIProxyAPI-APKs
+          path: release-apks/*
+          retention-days: 30
+
+      - name: Determine Tag & Release Name
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+            if [ -z "$TAG" ]; then TAG="v1.2.0"; fi
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: "CLIProxyAPI for Android ${{ steps.vars.outputs.tag }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 🚀 CLIProxyAPI for Android ${{ steps.vars.outputs.tag }} 发布
+
+            基于 Android PRoot Linux 虚拟化环境的高性能掌上 AI 网关与穿透中心（已升级至 **CLIProxyAPI v8.0.8** 官方内核）。
+
+            ### 📦 安装包下载说明
+            - **⚡️ `app-lite-release.apk` (约 1.2 MB)**：极简轻量版，首次启动从国内镜像高速下载 Glibc 与内核组件。
+            - **📦 `app-full-release.apk` (约 50 MB)**：离线完整版，内置全部运行时与最新 v8.0.8 原生 aarch64 内核，开箱即用。
+
+            ### 🔑 核心特性与更新
+            1. **内核升级**：全面升级至 CLIProxyAPI `v8.0.8` 官方内核，完整支持 `/v8/management/` 体系与 OAuth 控制台；
+            2. **配置规范**：默认采用 `config-version: 8` 结构，支持 `server:` 与 `management:` 规范；
+            3. **安全网关**：原生 TCP 零拷贝流式直通，内置多客用 Key 鉴权、RPM 限频与双轨配额管理；
+            4. **穿透组网**：集成 Cloudflare Tunnel 与免 Root 用户态 Tailscale 虚拟局域网。
+
+            ### 🛡️ 文件校验和 (SHA-256)
+            查看附件 `checksums.txt` 获取精确校验码。
+          files: |
+            release-apks/app-lite-release.apk
+            release-apks/app-full-release.apk
+            release-apks/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
